@@ -37,7 +37,7 @@ This project implements a production-oriented machine learning system to predict
 
 - **Modular Architecture**: Separated components for data ingestion, preprocessing, feature engineering, and modeling
 - **MLOps Integration**: MLflow for experiment tracking and model registry
-- **Multiple Model Support**: Random Forest, Gradient Boosting, and Logistic Regression
+- **Multiple Model Support**: Logistic Regression, Decision Tree, Random Forest and Gradient Boosting, each with three class-imbalance strategies
 - **Reproducible Pipeline**: Configuration-driven workflow with version control
 - **Comprehensive Evaluation**: Multiple metrics including accuracy, precision, recall, F1-score, and ROC-AUC
 
@@ -55,7 +55,7 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 
 **Dataset Source:** [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/222/bank+marketing)
 
-**Dataset Size:** 45,213 records with 17 features
+**Dataset Size:** 45,211 records with 17 features
 
 ---
 
@@ -77,49 +77,43 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     Data Ingestion Layer                      │
-│  - Load data from various formats (CSV, Excel)               │
-│  - Validate data integrity                                   │
-│  - Handle different separators (comma, semicolon)            │
+│  - Load semicolon-separated CSV / Excel / Parquet             │
+│  - Schema & data-quality validation (columns, types, nulls,  │
+│    target values, duplicates, 'unknown' rates)               │
+│  - Stratified, shuffled 70 / 15 / 15 train/val/test split    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Data Preprocessing Layer                     │
-│  - Handle missing values                                     │
-│  - Encode categorical variables                             │
-│  - Scale numerical features                                  │
-│  - Store fitted transformers for reproducibility             │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                 Feature Engineering Layer                     │
-│  - Create interaction features                              │
-│  - Generate polynomial features                             │
-│  - Feature selection (K-Best, Mutual Information)            │
+│        Feature Engineering + Preprocessing (sklearn Pipeline) │
+│  - Drop 'duration' (post-call leakage)                       │
+│  - Domain features: previously_contacted, prior_success,     │
+│    log_campaign, log_previous, negative_balance              │
+│  - One-hot encode nominal categoricals, scale numerics       │
+│  - Fitted on the training split only                         │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                    Model Training Layer                       │
-│  - Random Forest Classifier                                   │
-│  - Gradient Boosting Classifier                              │
-│  - Logistic Regression                                       │
-│  - Hyperparameter tuning with GridSearchCV                    │
-│  - Cross-validation                                           │
+│  - Logistic Regression, Decision Tree, Random Forest,        │
+│    Gradient Boosting (HistGradientBoosting)                  │
+│  - Class-imbalance strategies: none / class_weight / SMOTE   │
+│  - Shuffled stratified 5-fold CV, selection by PR-AUC        │
+│  - Bounded RandomizedSearchCV on the best candidate          │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Model Evaluation Layer                       │
-│  - Accuracy, Precision, Recall, F1-Score                     │
-│  - ROC-AUC analysis                                          │
-│  - Confusion matrix                                          │
-│  - Feature importance analysis                               │
+│  - Decision threshold tuned on validation (max F1)           │
+│  - Test: precision, recall, F1, ROC-AUC, PR-AUC, confusion   │
+│  - Business: conversion & lift in top 10 / 20 / 30 %         │
+│  - Quality gates (ROC-AUC, lift@10) fail the pipeline        │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                      MLOps Layer (MLflow)                     │
-│  - Experiment tracking                                       │
-│  - Model registry                                            │
-│  - Parameter logging                                         │
-│  - Metric logging                                            │
+│                MLOps Layer (MLflow, SQLite backend)           │
+│  - Nested run per model/strategy, comparison table           │
+│  - Parameters, metrics, data-quality report, model artifact  │
+│  - models/model.joblib + model_metadata.json for serving     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -131,7 +125,7 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 
 **File:** `data/raw/bank-full.csv`  
 **Format:** Semicolon-separated CSV  
-**Records:** 45,213  
+**Records:** 45,211  
 **Features:** 17 + 1 target variable
 
 ### Features
@@ -159,7 +153,9 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 ### Data Characteristics
 
 - **Class Imbalance:** The dataset is imbalanced with approximately 11.7% positive class (subscribers)
-- **Missing Values:** Some categorical features have "unknown" values
+- **Chronological Ordering:** Rows are ordered by contact date (May 2008 – Nov 2010) and the positive rate rises from ~3% in the first fifth of the file to ~32% in the last fifth. Splits and CV folds must be shuffled; this is also a real drift signal to monitor in production.
+- **Missing Values:** No nulls, but some categoricals contain "unknown" (poutcome 82%, contact 29%, education 4%, job <1%), which is kept as its own category
+- **Leakage:** `duration` is only known after the call, so it is excluded from the pre-contact model
 - **Data Types:** Mix of numerical and categorical features
 
 ---
@@ -170,10 +166,10 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 AAI-540-Project-Group-5/
 ├── data/
 │   ├── raw/                    # Raw data files
-│   │   ├── bank-full.csv       # Full dataset (45,213 records)
+│   │   ├── bank-full.csv       # Full dataset (45,211 records)
 │   │   ├── bank.csv            # Sample dataset (10%)
 │   │   └── bank-names.txt      # Feature descriptions
-│   ├── processed/              # Preprocessed data (generated)
+│   ├── processed/              # train/val/test Parquet splits (generated)
 │   └── external/               # External reference data
 ├── notebooks/
 │   ├── exploratory_data_analysis.ipynb    # EDA notebook
@@ -194,7 +190,8 @@ AAI-540-Project-Group-5/
 │   │   └── helpers.py                     # Helper utilities
 │   └── pipelines/
 │       └── training_pipeline.py            # End-to-end training pipeline
-├── mlruns/                                # MLflow experiment tracking
+├── models/                                # model.joblib + model_metadata.json (generated)
+├── mlflow.db                              # MLflow tracking store (generated)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_data_preprocessing.py         # Preprocessing tests
@@ -255,100 +252,48 @@ AAI-540-Project-Group-5/
 **Location:** `src/data_ingestion/data_ingestion.py`
 
 **Functions:**
-- `load_data(file_path, sep=',')`: Loads data from CSV or Excel files
-- `validate_data(df, required_columns)`: Validates required columns exist
+- `load_data(file_path, sep=',')`: Loads CSV, Excel or Parquet files
+- `validate_schema(df)`: Checks expected columns, numeric types, nulls, target values; returns a data-quality report
+- `split_data(X, y, val_size, test_size, random_state)`: Stratified, shuffled train/val/test split
 
-**Usage:**
 ```python
-from src.data_ingestion.data_ingestion import load_data
+from src.data_ingestion.data_ingestion import load_data, validate_schema, split_data
 
-# Load data with semicolon separator
 df = load_data('data/raw/bank-full.csv', sep=';')
+report = validate_schema(df)
 ```
 
-### Step 2: Data Preprocessing
+### Step 2: Preprocessing and Feature Engineering
 
-**Location:** `src/data_preprocessing/data_preprocessing.py`
+**Locations:** `src/data_preprocessing/data_preprocessing.py`, `src/feature_engineering/feature_engineering.py`
 
-**Class:** `DataPreprocessor`
+- `encode_target(y)`: Maps yes/no to 1/0
+- `build_preprocessor(numeric_cols, categorical_cols)`: `ColumnTransformer` with `StandardScaler` and `OneHotEncoder(handle_unknown='ignore')`
+- `add_domain_features(df)`: Stateless, row-wise pre-contact features (`DOMAIN_FEATURES`)
 
-**Methods:**
-- `handle_missing_values(df, strategy='mean')`: Handles missing values
-- `encode_categorical(df, categorical_cols)`: Encodes categorical variables
-- `scale_features(df, numeric_cols, fit=True)`: Scales numerical features
+These are not applied to the data up front. They are steps inside the model pipeline, so they are fitted on training folds only and the saved model accepts raw columns.
 
-**Usage:**
-```python
-from src.data_preprocessing.data_preprocessing import DataPreprocessor
-
-preprocessor = DataPreprocessor()
-X = preprocessor.handle_missing_values(X, strategy='mean')
-X = preprocessor.encode_categorical(X, categorical_cols)
-X = preprocessor.scale_features(X, numeric_cols)
-```
-
-### Step 3: Feature Engineering
-
-**Location:** `src/feature_engineering/feature_engineering.py`
-
-**Class:** `FeatureEngineer`
-
-**Methods:**
-- `create_interaction_features(df, feature_pairs)`: Creates interaction features
-- `create_polynomial_features(df, cols, degree=2)`: Creates polynomial features
-- `select_features(X, y, method='k_best', k=10)`: Selects important features
-
-**Usage:**
-```python
-from src.feature_engineering.feature_engineering import FeatureEngineer
-
-feature_engineer = FeatureEngineer()
-X = feature_engineer.create_interaction_features(X, [('age', 'balance')])
-X_selected, selected_features = feature_engineer.select_features(X, y, k=10)
-```
-
-### Step 4: Model Training
+### Step 3: Model Training
 
 **Location:** `src/models/train_model.py`
 
-**Functions:**
-- `train_model(X_train, y_train, model_type, params)`: Trains model with MLflow tracking
-- `hyperparameter_tuning(X_train, y_train, model_type)`: Performs hyperparameter tuning
+- `build_model(model_type, numeric_cols, categorical_cols, imbalance_strategy)`: Builds an imblearn `Pipeline` of features → preprocess → [SMOTE] → classifier
+- `compare_models(...)`: Cross-validates every model × imbalance strategy and logs each as a nested MLflow run
+- `hyperparameter_tuning(...)`: Bounded `RandomizedSearchCV` optimising PR-AUC
 
-**Supported Models:**
-- Random Forest
-- Gradient Boosting
-- Logistic Regression
+**Models:** `logistic_regression`, `decision_tree`, `random_forest`, `gradient_boosting`
+**Imbalance strategies:** `none`, `class_weight` (balanced loss), `smote` (oversampling inside CV folds only)
 
-**Usage:**
-```python
-from src.models.train_model import train_model
-
-result = train_model(
-    X_train, y_train,
-    model_type='random_forest',
-    params={'n_estimators': 200, 'max_depth': 20, 'random_state': 42}
-)
-```
-
-### Step 5: Model Evaluation
+### Step 4: Model Evaluation
 
 **Location:** `src/models/predict_model.py`
 
-**Functions:**
-- `predict_model(model, X)`: Makes predictions
-- `predict_proba(model, X)`: Gets prediction probabilities
-- `evaluate_model(model, X_test, y_test)`: Evaluates model performance
-- `get_feature_importance(model, feature_names)`: Gets feature importance
-
-**Usage:**
-```python
-from src.models.predict_model import evaluate_model
-
-metrics = evaluate_model(model, X_test, y_test)
-print(metrics)
-# Output: {'accuracy': 0.90, 'precision': 0.65, 'recall': 0.35, 'f1': 0.45, 'roc_auc': 0.85}
-```
+- `predict_proba(model, X)`: Positive-class probabilities
+- `predict_model(model, X, threshold)`: Class predictions at a tuned threshold
+- `find_best_threshold(y_val, proba)`: Threshold maximising F1 on validation data
+- `lift_at_k(y, proba, [10, 20, 30])`: Conversion rate and lift in the top-k% scored customers
+- `evaluate_model(model, X, y, threshold)`: Technical + business metrics
+- `get_feature_importance(model, feature_names)`: Works with a bare estimator or the pipeline
 
 ---
 
@@ -356,46 +301,52 @@ print(metrics)
 
 ### Running the Training Pipeline
 
-**Command:**
 ```bash
-PYTHONPATH=/Users/thedatayogi/CascadeProjects/AAI-540-Project-Group-5 python src/pipelines/training_pipeline.py
+python -m src.pipelines.training_pipeline
 ```
 
 **Pipeline Steps:**
 1. Load configuration from `config.yaml`
-2. Load data from configured path
-3. Validate data integrity
-4. Split features and target
-5. Encode target variable (yes/no → 1/0)
-6. Preprocess data (handle missing values, encode categoricals, scale features)
-7. Train model with configured parameters
-8. Log metrics and model to MLflow
-9. Return training results
+2. Load and validate data, log the data-quality report
+3. Drop excluded (leaky) features and encode the target
+4. Stratified 70/15/15 split; save splits to `data/processed/*.parquet`
+5. Cross-validate 4 models × 3 imbalance strategies on the training split
+6. Tune the best candidate (by CV PR-AUC)
+7. Choose the decision threshold on the validation split
+8. Evaluate once on the test split (technical + business metrics)
+9. Check quality gates; fail the run if they are not met
+10. Log everything to MLflow and save `models/model.joblib` and `models/model_metadata.json`
 
-### Model Configuration
+### Results (test split, 6,782 customers, `duration` excluded)
 
-**Configuration File:** `config.yaml`
+Cross-validation on the training split (mean of 5 shuffled folds, default 0.5 threshold for F1):
 
-```yaml
-model:
-  type: random_forest
-  params:
-    n_estimators: 200
-    max_depth: 20
-    min_samples_split: 5
-    random_state: 42
-```
+| Model | Strategy | ROC-AUC | PR-AUC | F1 | Recall |
+|---|---|---|---|---|---|
+| Logistic Regression | class_weight | 0.766 | 0.406 | 0.378 | 0.624 |
+| Decision Tree | class_weight | 0.754 | 0.354 | 0.415 | 0.553 |
+| Random Forest | none | **0.791** | **0.445** | 0.290 | 0.185 |
+| Random Forest | class_weight | 0.790 | 0.438 | 0.471 | 0.515 |
+| Random Forest | smote | 0.783 | 0.419 | 0.439 | 0.399 |
+| Gradient Boosting | class_weight | 0.794 | 0.442 | 0.455 | 0.617 |
 
-### Hyperparameter Tuning
+Selected model: tuned Random Forest (`max_depth=16, max_features=0.5, min_samples_leaf=8, n_estimators=314`), decision threshold 0.169 chosen on validation.
 
-**Usage:**
-```python
-from src.models.train_model import hyperparameter_tuning
+| Metric | Threshold 0.50 | Tuned threshold 0.169 |
+|---|---|---|
+| Precision | 0.620 | 0.432 |
+| Recall | 0.216 | 0.532 |
+| F1 | 0.320 | **0.477** |
 
-tuning_result = hyperparameter_tuning(X_train, y_train, model_type='random_forest')
-print(f"Best parameters: {tuning_result['best_params']}")
-print(f"Best CV score: {tuning_result['best_score']}")
-```
+ROC-AUC 0.793, PR-AUC 0.440.
+
+| Targeted segment | Conversion | Lift vs. random outreach (11.7%) |
+|---|---|---|
+| Top 10% | 49.3% | 4.22× |
+| Top 20% | 35.4% | 3.03× |
+| Top 30% | 26.8% | 2.29× |
+
+**Findings on class imbalance:** class weights and SMOTE raise F1 at the default 0.5 threshold because they shift predicted probabilities upwards, but they do not improve ranking quality (ROC-AUC / PR-AUC). SMOTE was consistently slightly worse than class weights. Tuning the decision threshold on validation data gives the same F1 gain without distorting probabilities, so the selected model uses no resampling plus a tuned threshold. The earlier baseline F1 of ~0.11 was mostly an artefact of unshuffled CV folds over chronologically ordered data, not of class imbalance.
 
 ---
 
@@ -403,34 +354,15 @@ print(f"Best CV score: {tuning_result['best_score']}")
 
 ### Evaluation Metrics
 
-The project uses the following metrics:
+- **ROC-AUC / PR-AUC:** Threshold-independent ranking quality; PR-AUC is the model-selection metric because it focuses on the minority class
+- **Precision / Recall / F1:** Reported at the default and the tuned threshold
+- **Confusion matrix:** TP / FP / TN / FN counts logged to MLflow
+- **Conversion and lift @ 10/20/30%:** Business value of targeting the highest-scored customers
+- Accuracy is reported but never used for selection (an all-"no" model scores 88%)
 
-- **Accuracy:** Overall correctness of predictions
-- **Precision:** Proportion of positive predictions that are correct
-- **Recall:** Proportion of actual positives correctly identified
-- **F1-Score:** Harmonic mean of precision and recall
-- **ROC-AUC:** Area under the ROC curve
+### Quality Gates
 
-### Running Evaluation Notebook
-
-1. Start Jupyter:
-   ```bash
-   jupyter notebook notebooks/
-   ```
-
-2. Open `model_evaluation.ipynb`
-
-3. Update the run ID with your MLflow run ID
-
-4. Run all cells to see evaluation results
-
-### Evaluation Outputs
-
-- Confusion matrix visualization
-- ROC curve
-- Precision-Recall curve
-- Feature importance plot
-- Threshold analysis
+Configured in `config.yaml` under `training.quality_gates` (currently ROC-AUC ≥ 0.75 and lift@10 ≥ 2.5). The pipeline raises an error and tags the MLflow run `quality_gates_passed=False` if the test metrics fall below them.
 
 ---
 
@@ -440,29 +372,30 @@ The project uses the following metrics:
 
 **Start MLflow UI:**
 ```bash
-mlflow ui
+mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 
 **Access:** http://localhost:5000
 
 ### Experiment Tracking
 
-All model training runs are automatically tracked with:
-- Parameters (model type, hyperparameters)
-- Metrics (CV F1 score, accuracy, etc.)
-- Artifacts (trained model)
-- Run metadata (timestamp, duration)
+Each pipeline run creates a parent run `training_pipeline` with:
+- Nested runs for every model × imbalance strategy (CV metrics)
+- `model_comparison.json` table and `data_quality_report.json`
+- Selected model type, strategy, hyperparameters and decision threshold
+- Validation and test metrics, including lift and conversion
+- The fitted pipeline with signature and input example
 
 ### Loading a Trained Model
 
 ```python
-import mlflow
-import mlflow.sklearn
+import json, joblib
 
-# Load model from MLflow
-run_id = "your_run_id"
-model_uri = f"runs:/{run_id}/model"
-model = mlflow.sklearn.load_model(model_uri)
+model = joblib.load('models/model.joblib')
+threshold = json.load(open('models/model_metadata.json'))['decision_threshold']
+
+proba = model.predict_proba(raw_customers_df)[:, 1]   # raw columns, no preprocessing needed
+predicted = proba >= threshold
 ```
 
 ---
@@ -472,37 +405,28 @@ model = mlflow.sklearn.load_model(model_uri)
 ### Example 1: Quick Start with Training Pipeline
 
 ```bash
-# Run the complete pipeline
-PYTHONPATH=/path/to/project python src/pipelines/training_pipeline.py
+python -m src.pipelines.training_pipeline
 ```
 
 ### Example 2: Custom Training in Notebook
 
 ```python
-import sys
-sys.path.append('/path/to/project')
+from src.data_ingestion.data_ingestion import load_data, split_data, NUMERIC_COLUMNS, CATEGORICAL_COLUMNS
+from src.data_preprocessing.data_preprocessing import encode_target
+from src.feature_engineering.feature_engineering import DOMAIN_FEATURES
+from src.models.train_model import build_model
+from src.models.predict_model import find_best_threshold, evaluate_model, predict_proba
 
-from src.data_ingestion.data_ingestion import load_data
-from src.data_preprocessing.data_preprocessing import DataPreprocessor
-from src.models.train_model import train_model
-
-# Load data
 df = load_data('data/raw/bank-full.csv', sep=';')
+X, y = df.drop(columns=['y', 'duration']), encode_target(df['y'])
+X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y)
 
-# Preprocess
-preprocessor = DataPreprocessor()
-X = df.drop(columns=['y'])
-y = df['y'].map({'yes': 1, 'no': 0})
+numeric_cols = [c for c in NUMERIC_COLUMNS if c != 'duration'] + DOMAIN_FEATURES
+model = build_model('gradient_boosting', numeric_cols, CATEGORICAL_COLUMNS, 'class_weight')
+model.fit(X_train, y_train)
 
-# Encode and scale
-categorical_cols = X.select_dtypes(include=['object']).columns.tolist()
-numeric_cols = X.select_dtypes(include=['number']).columns.tolist()
-X = preprocessor.handle_missing_values(X)
-X = preprocessor.encode_categorical(X, categorical_cols)
-X = preprocessor.scale_features(X, numeric_cols)
-
-# Train
-result = train_model(X, y, model_type='random_forest')
+threshold = find_best_threshold(y_val, predict_proba(model, X_val))['threshold']
+print(evaluate_model(model, X_test, y_test, threshold))
 ```
 
 ### Example 3: Running Tests
@@ -527,58 +451,40 @@ docker run term-deposit-prediction
 
 ### config.yaml
 
-The main configuration file controls:
+The main configuration file controls the data split, excluded features, candidate models, imbalance strategies, tuning budget, threshold metric, quality gates and MLflow settings:
 
 ```yaml
-# Data configuration
 data:
   raw_path: data/raw/bank-full.csv
   separator: ";"
-  processed_path: data/processed
-  test_size: 0.2
-  random_state: 42
+  val_size: 0.15
+  test_size: 0.15
+  excluded_features: [duration]
 
-# Preprocessing configuration
-preprocessing:
-  missing_value_strategy: mean
-  scale_features: true
-  encode_categorical: true
+training:
+  cv_folds: 5
+  selection_metric: average_precision
+  candidate_models: [logistic_regression, decision_tree, random_forest, gradient_boosting]
+  imbalance_strategies: [none, class_weight, smote]
+  tuning_iterations: 20
+  threshold_metric: f1
+  quality_gates:
+    roc_auc: 0.75
+    lift_at_10: 2.5
 
-# Feature engineering configuration
-feature_engineering:
-  create_interactions: false
-  create_polynomial: false
-  feature_selection: false
-  k_best_features: 10
-
-# Model configuration
-model:
-  type: random_forest
-  params:
-    n_estimators: 200
-    max_depth: 20
-    min_samples_split: 5
-    random_state: 42
-
-# MLflow configuration
 mlflow:
   experiment_name: term_deposit_prediction
-  tracking_uri: ./mlruns
+  tracking_uri: sqlite:///mlflow.db
 ```
 
 ### Environment Variables (.env)
 
 ```bash
-# MLflow configuration
-MLFLOW_TRACKING_URI=./mlruns
+MLFLOW_TRACKING_URI=sqlite:///mlflow.db
 MLFLOW_EXPERIMENT_NAME=term_deposit_prediction
-
-# Data paths
 DATA_RAW_PATH=data/raw
 DATA_PROCESSED_PATH=data/processed
 DATA_EXTERNAL_PATH=data/external
-
-# Model configuration
 MODEL_TYPE=random_forest
 RANDOM_STATE=42
 ```
@@ -593,30 +499,24 @@ RANDOM_STATE=42
 
 **Error:** `ModuleNotFoundError: No module named 'src'`
 
-**Solution:** Set PYTHONPATH before running scripts:
+**Solution:** Run from the project root as a module:
 ```bash
-PYTHONPATH=/path/to/project python src/pipelines/training_pipeline.py
+python -m src.pipelines.training_pipeline
 ```
 
-#### Issue 2: MLflow Trusted Types Error
+#### Issue 2: MLflow File-Store Error
 
-**Error:** `Untrusted types found in the file: ['sklearn.tree._tree.Tree']`
+**Error:** `The filesystem tracking backend (e.g., './mlruns') is in maintenance mode`
 
-**Solution:** The code already handles this by setting `skops_trusted_types=["sklearn.tree._tree.Tree"]` in the model logging function.
+**Solution:** MLflow 3 requires a database backend. The project uses `sqlite:///mlflow.db` (set in `config.yaml` and `.env`).
 
 #### Issue 3: Low F1 Score
 
-**Issue:** F1 score around 0.1-0.2
+**Issue:** F1 score around 0.1 when cross-validating on the full file
 
-**Causes:**
-- Class imbalance in dataset (only ~11.7% positive class)
-- Default threshold of 0.5 may not be optimal
+**Cause:** `bank-full.csv` is sorted by date, and unshuffled CV folds train on one period and test on another with a very different positive rate.
 
-**Solutions:**
-- Use class weights in model parameters
-- Apply SMOTE or other oversampling techniques
-- Adjust decision threshold based on precision-recall trade-off
-- Try different models or hyperparameters
+**Solution:** Use shuffled `StratifiedKFold` (already done in `compare_models` / `hyperparameter_tuning`) and tune the decision threshold on validation data.
 
 #### Issue 4: Data Loading Error
 
@@ -640,9 +540,8 @@ PYTHONPATH=/path/to/project python src/pipelines/training_pipeline.py
 ### Model Improvements
 
 1. **Class Imbalance Handling**
-   - Implement SMOTE for oversampling
-   - Add class weights to models
-   - Try focal loss for imbalanced classification
+   - Try focal loss or probability calibration (Platt / isotonic) for better-calibrated scores
+   - Cost-sensitive threshold based on the actual cost of a call vs. the value of a deposit
 
 2. **Advanced Feature Engineering**
    - Create domain-specific features (e.g., customer segmentation)
