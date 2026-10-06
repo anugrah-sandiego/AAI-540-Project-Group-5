@@ -4,28 +4,48 @@ data:
   raw_path: data/raw/bank-full.csv
   separator: ";"
   processed_path: data/processed
-  test_size: 0.2
+  target_column: y
+  # 70% train / 15% validation / 15% test, stratified on the target
+  val_size: 0.15
+  test_size: 0.15
   random_state: 42
-
-preprocessing:
-  missing_value_strategy: mean
-  scale_features: true
-  encode_categorical: true
+  # 'duration' is only known after the call ends, so it would leak the outcome
+  # into a pre-contact targeting model (see design document, Feature Engineering)
+  excluded_features:
+    - duration
 
 feature_engineering:
-  create_interactions: false
-  create_polynomial: false
-  feature_selection: false
-  k_best_features: 10
+  add_domain_features: true
+
+training:
+  cv_folds: 5
+  # Primary selection metric: PR-AUC is threshold-independent and robust to the
+  # ~11.7% positive rate, unlike accuracy
+  selection_metric: average_precision
+  candidate_models:
+    - logistic_regression
+    - decision_tree
+    - random_forest
+    - gradient_boosting
+  # Class-imbalance strategies compared for every candidate model
+  imbalance_strategies:
+    - none
+    - class_weight
+    - smote
+  tuning_iterations: 20
+  # Decision threshold is chosen on the validation set to maximise this metric
+  threshold_metric: f1
+  # Minimum test-set quality gates; the pipeline fails if these are not met
+  quality_gates:
+    roc_auc: 0.75
+    lift_at_10: 2.5
+
+evaluation:
+  lift_percentiles: [10, 20, 30]
 
 model:
-  type: random_forest
-  params:
-    n_estimators: 200
-    max_depth: 20
-    min_samples_split: 5
-    random_state: 42
+  output_dir: models
 
 mlflow:
   experiment_name: term_deposit_prediction
-  tracking_uri: ./mlruns
+  tracking_uri: sqlite:///mlflow.db

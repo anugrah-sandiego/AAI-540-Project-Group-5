@@ -8,6 +8,35 @@ from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classi
 from typing import List, Tuple
 
 
+# Numeric columns created by add_domain_features
+DOMAIN_FEATURES = ['previously_contacted', 'prior_success', 'log_campaign',
+                   'log_previous', 'negative_balance']
+
+
+def add_domain_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add pre-contact domain features summarising customer and campaign history.
+
+    The transformation is row-wise and stateless, so it cannot leak information
+    between splits and can run inside the serving pipeline unchanged.
+
+    Args:
+        df: DataFrame with raw bank marketing columns
+
+    Returns:
+        DataFrame with DOMAIN_FEATURES columns added
+    """
+    df = df.copy()
+    # pdays == -1 means the customer was not contacted in a previous campaign
+    df['previously_contacted'] = (df['pdays'] != -1).astype(int)
+    df['prior_success'] = (df['poutcome'] == 'success').astype(int)
+    # campaign and previous are heavily right-skewed counts
+    df['log_campaign'] = np.log1p(df['campaign'])
+    df['log_previous'] = np.log1p(df['previous'])
+    df['negative_balance'] = (df['balance'] < 0).astype(int)
+    return df
+
+
 class FeatureEngineer:
     """Handle feature engineering operations."""
     

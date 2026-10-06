@@ -36,6 +36,9 @@ ENV/
 mlruns/
 mlflow.db
 
+# Generated model artifacts
+models/
+
 # Data
 data/processed/
 data/raw/*.csv

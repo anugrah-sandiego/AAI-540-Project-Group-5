@@ -21,4 +21,4 @@ RUN mkdir -p mlruns
 EXPOSE 5000
 
 # Default command
-CMD ["python", "src/pipelines/training_pipeline.py"]
+CMD ["python", "-m", "src.pipelines.training_pipeline"]
