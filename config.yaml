@@ -1,0 +1,31 @@
+# Configuration file for Term Deposit Prediction Project
+
+data:
+  raw_path: data/raw/bank-full.csv
+  separator: ";"
+  processed_path: data/processed
+  test_size: 0.2
+  random_state: 42
+
+preprocessing:
+  missing_value_strategy: mean
+  scale_features: true
+  encode_categorical: true
+
+feature_engineering:
+  create_interactions: false
+  create_polynomial: false
+  feature_selection: false
+  k_best_features: 10
+
+model:
+  type: random_forest
+  params:
+    n_estimators: 200
+    max_depth: 20
+    min_samples_split: 5
+    random_state: 42
+
+mlflow:
+  experiment_name: term_deposit_prediction
+  tracking_uri: ./mlruns
