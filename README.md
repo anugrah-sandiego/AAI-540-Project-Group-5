@@ -22,10 +22,11 @@
 8. [Model Training](#model-training)
 9. [Model Evaluation](#model-evaluation)
 10. [MLOps with MLflow](#mlops-with-mlflow)
-11. [Usage Examples](#usage-examples)
-12. [Configuration](#configuration)
-13. [Troubleshooting](#troubleshooting)
-14. [Future Improvements](#future-improvements)
+11. [AWS SageMaker Deployment](#aws-sagemaker-deployment)
+12. [Usage Examples](#usage-examples)
+13. [Configuration](#configuration)
+14. [Troubleshooting](#troubleshooting)
+15. [Future Improvements](#future-improvements)
 
 ---
 
@@ -188,14 +189,32 @@ AAI-540-Project-Group-5/
 │   │   └── predict_model.py               # Model prediction and evaluation
 │   ├── utils/
 │   │   └── helpers.py                     # Helper utilities
-│   └── pipelines/
-│       └── training_pipeline.py            # End-to-end training pipeline
+│   ├── pipelines/
+│   │   └── training_pipeline.py            # End-to-end training pipeline
+│   └── aws/
+│       └── sagemaker/
+│           ├── data_upload.py              # S3 data upload
+│           ├── feature_store.py            # SageMaker Feature Store
+│           ├── training.py                 # SageMaker training jobs
+│           ├── deployment.py               # Endpoint deployment
+│           ├── batch_inference.py          # Batch transform jobs
+│           ├── model_registry.py           # Model Registry
+│           ├── monitoring.py               # Model monitoring
+│           ├── infrastructure_monitoring.py # CloudWatch dashboards
+│           ├── rollback.py                 # Rollback utilities
+│           └── scripts/
+│               ├── train.py                # Training script
+│               ├── inference.py            # Inference script
+│               └── batch_transform.py      # Batch transform script
 ├── models/                                # model.joblib + model_metadata.json (generated)
 ├── mlflow.db                              # MLflow tracking store (generated)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_data_preprocessing.py         # Preprocessing tests
 │   └── test_model_training.py             # Model training tests
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml                     # GitHub Actions CI/CD pipeline
 ├── requirements.txt                       # Python dependencies
 ├── Dockerfile                            # Container configuration
 ├── config.yaml                           # Project configuration
@@ -397,6 +416,146 @@ threshold = json.load(open('models/model_metadata.json'))['decision_threshold']
 proba = model.predict_proba(raw_customers_df)[:, 1]   # raw columns, no preprocessing needed
 predicted = proba >= threshold
 ```
+
+---
+
+## AWS SageMaker Deployment
+
+This project includes comprehensive AWS SageMaker integration for production deployment. The implementation includes:
+
+### SageMaker Components
+
+1. **Data Upload to S3** - Upload local data to S3 for SageMaker processing
+2. **Feature Store** - SageMaker Feature Groups for storing and retrieving features
+3. **Training Jobs** - Managed training jobs on SageMaker
+4. **Model Deployment** - Real-time endpoint deployment
+5. **Batch Inference** - Batch transform jobs for bulk predictions
+6. **Model Registry** - Model versioning and approval workflow
+7. **Model Monitoring** - Data capture and quality monitoring
+8. **Infrastructure Monitoring** - CloudWatch dashboards for system monitoring
+9. **CI/CD Pipeline** - GitHub Actions for automated deployment
+
+### Prerequisites
+
+Before deploying to SageMaker, ensure you have:
+
+- AWS account with appropriate IAM permissions
+- AWS credentials configured in `.env` file:
+  ```bash
+  AWS_ACCOUNT_ID=your_account_id
+  AWS_REGION=us-east-1
+  AWS_ROLE_ARN=arn:aws:iam::your_account_id:role/your_role
+  SAGEMAKER_OUTPUT_PATH=s3://your-bucket/path
+  ```
+- SageMaker execution role with necessary permissions
+- S3 bucket for data storage
+
+### AWS SageMaker Setup
+
+1. **Install AWS Dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Configure AWS Credentials**
+   ```bash
+   # Edit .env file with your AWS credentials
+   ```
+
+3. **Upload Data to S3**
+   ```bash
+   python -m src.aws.sagemaker.data_upload
+   ```
+
+4. **Create Feature Store**
+   ```bash
+   python -m src.aws.sagemaker.feature_store
+   ```
+
+5. **Run SageMaker Training**
+   ```bash
+   python -m src.aws.sagemaker.training
+   ```
+
+6. **Register Model in Model Registry**
+   ```bash
+   python -m src.aws.sagemaker.model_registry
+   ```
+
+7. **Deploy Model to Endpoint**
+   ```bash
+   python -m src.aws.sagemaker.deployment
+   ```
+
+8. **Set Up Model Monitoring**
+   ```bash
+   python -m src.aws.sagemaker.monitoring
+   ```
+
+9. **Create Infrastructure Monitoring Dashboards**
+   ```bash
+   python -m src.aws.sagemaker.infrastructure_monitoring
+   ```
+
+### CI/CD Pipeline
+
+The project includes a GitHub Actions CI/CD pipeline (`.github/workflows/ci-cd.yml`) that:
+
+- Runs unit tests on every push and pull request
+- Builds and pushes Docker images
+- Deploys to SageMaker on main branch pushes
+- Includes rollback mechanism on deployment failure
+- Supports manual batch inference job triggers
+
+**Required GitHub Secrets:**
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_ACCOUNT_ID`
+- `AWS_ROLE_ARN`
+- `DOCKER_USERNAME`
+- `DOCKER_PASSWORD`
+
+
+
+### Monitoring Dashboards
+
+The system creates three CloudWatch dashboards:
+
+1. **ml-system-monitoring** - Comprehensive system-wide monitoring
+2. **training-jobs-monitoring** - Training job specific metrics
+3. **endpoint-monitoring** - Endpoint performance metrics
+
+Each dashboard includes:
+- Resource utilization (CPU, memory, GPU)
+- Latency metrics
+- Error rates
+- Request counts
+- S3 operations
+- Feature Store performance
+
+### Batch Inference
+
+To run batch inference on a dataset:
+
+```bash
+python -m src.aws.sagemaker.batch_inference
+```
+
+This will:
+- Create a transformer from the registered model
+- Process input data from S3
+- Output predictions to S3
+- Monitor job completion
+
+### Rollback
+
+In case of deployment failure, the CI/CD pipeline automatically triggers rollback:
+
+```bash
+python -m src.aws.sagemaker.rollback
+```
+
+This reverts the endpoint to the last approved model version.
 
 ---
 

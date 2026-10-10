@@ -47,6 +47,12 @@ data/raw/*.csv
 
 # Environment
 .env
+.env.local
+
+# AWS
+.aws/
+.boto/
+sagemaker/
 
 # Jupyter
 .ipynb_checkpoints/
