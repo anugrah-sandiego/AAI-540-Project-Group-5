@@ -52,7 +52,6 @@ data/raw/*.csv
 # AWS
 .aws/
 .boto/
-sagemaker/
 
 # Jupyter
 .ipynb_checkpoints/
