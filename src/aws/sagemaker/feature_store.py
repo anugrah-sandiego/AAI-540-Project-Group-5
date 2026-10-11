@@ -104,9 +104,7 @@ class BankMarketingFeatureStore:
             s3_uri=f"s3://{self.bucket_name}/{self.base_prefix}/feature-store/",
             record_identifier_name=record_identifier_name,
             event_time_feature_name=event_time_feature_name,
-            role_arn=self.role_arn,
-            enable_online_store=True,
-            enable_offline_store=True
+            role_arn=self.role_arn
         )
 
         # Wait for feature group to be created
