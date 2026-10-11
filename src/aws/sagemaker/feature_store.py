@@ -3,8 +3,10 @@ SageMaker Feature Store implementation for bank marketing dataset.
 """
 
 import os
+import io
 import pandas as pd
 import boto3
+from botocore.exceptions import ClientError
 from sagemaker.session import Session
 from sagemaker.feature_store.feature_group import FeatureGroup
 from dotenv import load_dotenv
@@ -25,7 +27,12 @@ class BankMarketingFeatureStore:
 
         self.region = os.getenv('AWS_REGION', 'us-east-1')
         self.role_arn = os.getenv('AWS_ROLE_ARN')
-        self.bucket_name = f"sagemaker-{self.region}-{os.getenv('AWS_ACCOUNT_ID')}"
+        if not self.role_arn:
+            raise ValueError('Set AWS_ROLE_ARN to your SageMaker execution role ARN.')
+        account_id = os.getenv('AWS_ACCOUNT_ID')
+        if not account_id:
+            account_id = boto3.client('sts', region_name=self.region).get_caller_identity()['Account']
+        self.bucket_name = f"sagemaker-{self.region}-{account_id}"
         self.base_prefix = "aai540/bank-marketing"
 
         self.sagemaker_session = Session(boto3.session.Session(region_name=self.region))
@@ -80,23 +87,35 @@ class BankMarketingFeatureStore:
         Returns:
             FeatureGroup object
         """
-        feature_definitions = self._get_feature_definitions(df)
+        for column in (record_identifier_name, event_time_feature_name):
+            if column not in df.columns:
+                raise ValueError(f'Missing required feature column: {column}')
 
         feature_group = FeatureGroup(
             name=feature_group_name,
             sagemaker_session=self.sagemaker_session,
-            feature_definitions=feature_definitions
         )
+        feature_group.load_feature_definitions(data_frame=df)
 
-        # Check if feature group already exists
+        # Only a missing group is a reason to create a new one.
         try:
-            existing = self.sagemaker_session.describe_feature_group(
+            existing = self.sagemaker_session.sagemaker_client.describe_feature_group(
                 FeatureGroupName=feature_group_name
             )
-            logger.info(f"Feature group {feature_group_name} already exists")
+        except ClientError as exc:
+            if exc.response['Error']['Code'] not in ('ResourceNotFound', 'ResourceNotFoundException'):
+                raise
+        else:
+            if existing.get('FeatureGroupStatus') != 'Created':
+                raise RuntimeError(f"Existing group is not ready: {existing.get('FeatureGroupStatus')}")
+            expected = {item.to_dict()['FeatureName']: item.to_dict()['FeatureType']
+                        for item in feature_group.feature_definitions}
+            actual = {item['FeatureName']: item['FeatureType']
+                      for item in existing['FeatureDefinitions']}
+            if any(actual.get(name) != kind for name, kind in expected.items()):
+                raise ValueError('Existing feature group schema does not match the input data.')
+            logger.info(f'Feature group {feature_group_name} already exists')
             return feature_group
-        except Exception:
-            pass
 
         # Create feature group
         logger.info(f"Creating feature group: {feature_group_name}")
@@ -110,7 +129,10 @@ class BankMarketingFeatureStore:
         # Wait for feature group to be created
         logger.info("Waiting for feature group to be created...")
         status = feature_group.describe().get('FeatureGroupStatus')
+        deadline = time.monotonic() + 900
         while status == 'Creating':
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f'Feature group creation timed out: {feature_group_name}')
             time.sleep(5)
             status = feature_group.describe().get('FeatureGroupStatus')
             logger.info(f"Feature group status: {status}")
@@ -134,11 +156,11 @@ class BankMarketingFeatureStore:
         """
         # Add event time if not present
         if 'event_time' not in df.columns:
-            df['event_time'] = datetime.now().isoformat()
+            df['event_time'] = float(time.time())
 
         # Add record identifier if not present
         if 'customer_id' not in df.columns:
-            df['customer_id'] = range(len(df))
+            df['customer_id'] = [str(i) for i in range(len(df))]
 
         logger.info(f"Ingesting {len(df)} records into feature group...")
         feature_group.ingest(
@@ -148,7 +170,7 @@ class BankMarketingFeatureStore:
         )
         logger.info("Data ingestion completed")
 
-    def create_bank_marketing_feature_groups(self, data_path: str = "data/raw/bank-full.csv"):
+    def create_bank_marketing_feature_groups(self, data_path: str = None):
         """
         Create feature groups for bank marketing dataset.
 
@@ -158,8 +180,26 @@ class BankMarketingFeatureStore:
         Returns:
             Dictionary of created feature groups
         """
-        # Load data
-        df = pd.read_csv(data_path, sep=';')
+        # Load raw data from S3; an optional data_path must also be an S3 URI.
+        from urllib.parse import urlparse
+        uri = data_path or f's3://{self.bucket_name}/{self.base_prefix}/raw/bank-full.csv'
+        parsed = urlparse(uri)
+        if parsed.scheme != 's3' or not parsed.netloc or not parsed.path.lstrip('/'):
+            raise ValueError('data_path must be a valid s3://bucket/key URI')
+        response = boto3.client('s3', region_name=self.region).get_object(
+            Bucket=parsed.netloc, Key=parsed.path.lstrip('/')
+        )
+        body = response['Body']
+        try:
+            df = pd.read_csv(io.BytesIO(body.read()), sep=';')
+        finally:
+            body.close()
+        if df.empty:
+            raise ValueError('Raw S3 dataset is empty')
+        # Define identifier and event-time features before schema inference.
+        df['customer_id'] = [str(i) for i in range(len(df))]
+        df['event_time'] = float(time.time())
+        logger.info(f'Loaded {len(df)} rows from {uri}')
 
         # Create raw feature group
         logger.info("Creating raw feature group...")

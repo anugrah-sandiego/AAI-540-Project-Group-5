@@ -240,7 +240,11 @@ def main():
     deployer = SageMakerDeployment()
 
     # Example model S3 URI (would be obtained from training job)
-    model_s3_uri = f"s3://{deployer.bucket_name}/{deployer.base_prefix}/models/model.tar.gz"
+    model_s3_uri = (
+        "s3://sagemaker-us-east-1-562792440372/"
+        "aai540/bank-marketing/models/"
+        "bank-marketing-training-20261011-095612/output/model.tar.gz"
+    )
 
     # Deploy model
     predictor = deployer.deploy_model(model_s3_uri)

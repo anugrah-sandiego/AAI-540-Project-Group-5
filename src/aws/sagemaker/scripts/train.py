@@ -1,3 +1,4 @@
+
 import argparse
 import pandas as pd
 import numpy as np
@@ -7,8 +8,6 @@ import os
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
-import mlflow
-import mlflow.sklearn
 
 
 def parse_args():
@@ -26,25 +25,34 @@ def parse_args():
     parser.add_argument('--train', type=str, default=os.environ.get('SM_CHANNEL_TRAIN'))
     parser.add_argument('--validation', type=str, default=os.environ.get('SM_CHANNEL_VALIDATION'))
     parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR'))
-    parser.add_argument('--output_dir', type=str, default=os.environ.get('SM_OUTPUT_DIR'))
+    parser.add_argument('--output_dir', type=str, default=os.environ.get('SM_OUTPUT_DATA_DIR', '/opt/ml/output/data'))
 
     return parser.parse_args()
 
 
 def load_data(train_path, val_path):
     """Load training and validation data."""
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
+    from pathlib import Path
 
-    # Separate features and target
-    target_column = 'y'
-    excluded_features = ['duration']
+    def read_channel(channel):
+        files = sorted(Path(channel).glob('*.parquet'))
+        if not files:
+            raise FileNotFoundError(f'No Parquet input files in {channel}')
+        return pd.concat([pd.read_parquet(path) for path in files], ignore_index=True)
 
-    X_train = train_df.drop(columns=[target_column] + excluded_features)
-    y_train = train_df[target_column].map({'yes': 1, 'no': 0})
+    def separate(frame):
+        labels = frame['y']
+        if labels.isin([0, 1]).all():
+            labels = labels.astype(int)
+        elif labels.isin(['yes', 'no']).all():
+            labels = labels.map({'yes': 1, 'no': 0})
+        else:
+            raise ValueError('Labels must be 0/1 or yes/no')
+        features = frame.drop(columns=['y']).drop(columns=['duration'], errors='ignore')
+        return features, labels
 
-    X_val = val_df.drop(columns=[target_column] + excluded_features)
-    y_val = val_df[target_column].map({'yes': 1, 'no': 0})
+    X_train, y_train = separate(read_channel(train_path))
+    X_val, y_val = separate(read_channel(val_path))
 
     return X_train, y_train, X_val, y_val
 
