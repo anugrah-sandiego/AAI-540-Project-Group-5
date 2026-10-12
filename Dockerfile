@@ -2,6 +2,12 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Show logs live in Docker/CloudWatch; LOG_LEVEL and LOG_FORMAT (text or json)
+# are read by src/utils/logging_config.py
+ENV PYTHONUNBUFFERED=1 \
+    LOG_LEVEL=INFO \
+    LOG_FORMAT=text
+
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     gcc \

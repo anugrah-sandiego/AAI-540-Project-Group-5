@@ -9,10 +9,11 @@ from sagemaker.model_monitor import DefaultModelMonitor
 from sagemaker.model_monitor.dataset_format import DatasetFormat
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 from datetime import datetime
 import json
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -333,8 +334,9 @@ def main():
     # Create CloudWatch dashboard
     dashboard_body = monitor.create_cloudwatch_dashboard()
 
-    print("CloudWatch dashboard created")
-    print(f"Dashboard widgets: {len(dashboard_body['widgets'])}")
+    # Report the dashboard through the logger instead of print
+    logger.info("CloudWatch dashboard created")
+    logger.info("Dashboard widgets: %d", len(dashboard_body['widgets']))
 
     # Example: Create monitoring schedule
     # endpoint_name = "bank-marketing-endpoint"
@@ -343,4 +345,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

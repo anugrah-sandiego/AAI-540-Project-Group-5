@@ -11,8 +11,9 @@ import boto3
 import sagemaker
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -112,5 +113,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     success = main()
     sys.exit(0 if success else 1)

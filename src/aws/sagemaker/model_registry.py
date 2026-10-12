@@ -1,5 +1,6 @@
 """Register SageMaker training artifacts using supported boto3 APIs."""
 import logging
+from src.utils.logging_config import setup_logging
 import os
 import boto3
 import sagemaker
@@ -7,7 +8,7 @@ from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from sagemaker.model import ModelPackage
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -113,9 +114,12 @@ def main():
         model_s3_uri=job['ModelArtifacts']['S3ModelArtifacts'],
         image_uri=job['AlgorithmSpecification']['TrainingImage'],
         model_description=f'Random Forest artifact from {job_name}; inference packaging requires validation.')
-    print(f'Model package ARN: {package.model_package_arn}')
-    print('Approval status: PendingManualApproval')
+    # Log the package ARN so the registered model can be traced later
+    logger.info('Model package ARN: %s', package.model_package_arn)
+    logger.info('Approval status: PendingManualApproval')
 
 
 if __name__ == '__main__':
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

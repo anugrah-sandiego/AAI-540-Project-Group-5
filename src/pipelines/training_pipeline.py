@@ -8,6 +8,8 @@ log, register and save the model.
 """
 
 import json
+import logging
+import sys
 import joblib
 import mlflow
 import mlflow.sklearn
@@ -20,6 +22,10 @@ from src.feature_engineering.feature_engineering import DOMAIN_FEATURES
 from src.models.train_model import compare_models, hyperparameter_tuning
 from src.models.predict_model import predict_proba, find_best_threshold, evaluate_model
 from src.utils.helpers import load_config, ensure_dir
+from src.utils.logging_config import setup_logging, log_stage
+
+# Module logger; output format is set by setup_logging() in the entry point
+logger = logging.getLogger(__name__)
 
 
 class TrainingPipeline:
@@ -50,21 +56,23 @@ class TrainingPipeline:
         add_features = self.config.get('feature_engineering', {}).get('add_domain_features', True)
         random_state = data_cfg.get('random_state', 42)
 
-        # Load and validate data
-        print("Loading data...")
-        df = load_data(data_path, sep=data_cfg.get('separator', ','))
-        quality_report = validate_schema(df)
-        print(f"Data quality: {quality_report}")
+        # Load and validate data (each stage below is timed and logged by log_stage)
+        with log_stage(logger, 'load and validate data'):
+            df = load_data(data_path, sep=data_cfg.get('separator', ','))
+            quality_report = validate_schema(df)
+            logger.info("Data quality: %s", quality_report)
 
         # Drop leakage columns and split
-        excluded = data_cfg.get('excluded_features', [])
-        X = df.drop(columns=[target_column] + excluded)
-        y = encode_target(df[target_column])
-        X_train, X_val, X_test, y_train, y_val, y_test = split_data(
-            X, y, data_cfg['val_size'], data_cfg['test_size'], random_state
-        )
-        print(f"Split sizes - train: {len(X_train)}, val: {len(X_val)}, test: {len(X_test)}")
-        self._save_splits(X_train, X_val, X_test, y_train, y_val, y_test)
+        with log_stage(logger, 'split data'):
+            excluded = data_cfg.get('excluded_features', [])
+            X = df.drop(columns=[target_column] + excluded)
+            y = encode_target(df[target_column])
+            X_train, X_val, X_test, y_train, y_val, y_test = split_data(
+                X, y, data_cfg['val_size'], data_cfg['test_size'], random_state
+            )
+            logger.info("Split sizes - train: %d, val: %d, test: %d",
+                        len(X_train), len(X_val), len(X_test))
+            self._save_splits(X_train, X_val, X_test, y_train, y_val, y_test)
 
         numeric_cols = [c for c in NUMERIC_COLUMNS if c not in excluded]
         if add_features:
@@ -75,68 +83,76 @@ class TrainingPipeline:
         mlflow.set_experiment(self.config['mlflow']['experiment_name'])
 
         with mlflow.start_run(run_name='training_pipeline') as run:
+            # Log the run id so this run is easy to find in the MLflow UI
+            logger.info("MLflow run id: %s", run.info.run_id)
             mlflow.log_params({'excluded_features': ','.join(excluded),
                                'add_domain_features': add_features,
                                'n_train': len(X_train), 'n_val': len(X_val), 'n_test': len(X_test)})
             mlflow.log_dict(quality_report, 'data_quality_report.json')
 
             # Compare models and class-imbalance strategies
-            print("Comparing models and imbalance strategies (CV on train)...")
-            comparison = compare_models(
-                X_train, y_train, numeric_cols, categorical_cols,
-                train_cfg['candidate_models'], train_cfg['imbalance_strategies'],
-                train_cfg['cv_folds'], add_features, random_state
-            )
-            mlflow.log_table(comparison, 'model_comparison.json')
-            best = comparison.iloc[0]
-            print(f"Best candidate: {best.model_type} / {best.imbalance_strategy}")
+            with log_stage(logger, 'compare models and imbalance strategies (CV on train)'):
+                comparison = compare_models(
+                    X_train, y_train, numeric_cols, categorical_cols,
+                    train_cfg['candidate_models'], train_cfg['imbalance_strategies'],
+                    train_cfg['cv_folds'], add_features, random_state
+                )
+                mlflow.log_table(comparison, 'model_comparison.json')
+                best = comparison.iloc[0]
+                logger.info("Best candidate: %s / %s", best.model_type, best.imbalance_strategy)
 
             # Tune the best candidate
-            print("Tuning hyperparameters...")
-            tuned = hyperparameter_tuning(
-                X_train, y_train, best.model_type, numeric_cols, categorical_cols,
-                best.imbalance_strategy, train_cfg['tuning_iterations'],
-                train_cfg['selection_metric'], train_cfg['cv_folds'], add_features, random_state
-            )
-            model = tuned['best_model']
-            print(f"Best params: {tuned['best_params']} (CV {train_cfg['selection_metric']}: "
-                  f"{tuned['best_score']:.4f})")
+            with log_stage(logger, f'tune hyperparameters ({best.model_type})'):
+                tuned = hyperparameter_tuning(
+                    X_train, y_train, best.model_type, numeric_cols, categorical_cols,
+                    best.imbalance_strategy, train_cfg['tuning_iterations'],
+                    train_cfg['selection_metric'], train_cfg['cv_folds'], add_features, random_state
+                )
+                model = tuned['best_model']
+                logger.info("Best params: %s (CV %s: %.4f)", tuned['best_params'],
+                            train_cfg['selection_metric'], tuned['best_score'])
 
             # Choose the decision threshold on validation data
-            threshold_info = find_best_threshold(y_val, predict_proba(model, X_val),
-                                                 train_cfg['threshold_metric'])
-            threshold = threshold_info['threshold']
-            print(f"Validation threshold: {threshold:.4f} -> {threshold_info}")
+            with log_stage(logger, 'choose decision threshold (validation)'):
+                threshold_info = find_best_threshold(y_val, predict_proba(model, X_val),
+                                                     train_cfg['threshold_metric'])
+                threshold = threshold_info['threshold']
+                logger.info("Validation threshold: %.4f -> %s", threshold, threshold_info)
 
             # Final, single evaluation on the untouched test set
-            percentiles = self.config['evaluation']['lift_percentiles']
-            val_metrics = evaluate_model(model, X_val, y_val, threshold, percentiles)
-            test_metrics = evaluate_model(model, X_test, y_test, threshold, percentiles)
-            default_metrics = evaluate_model(model, X_test, y_test, 0.5, percentiles)
+            with log_stage(logger, 'evaluate on test set'):
+                percentiles = self.config['evaluation']['lift_percentiles']
+                val_metrics = evaluate_model(model, X_val, y_val, threshold, percentiles)
+                test_metrics = evaluate_model(model, X_test, y_test, threshold, percentiles)
+                default_metrics = evaluate_model(model, X_test, y_test, 0.5, percentiles)
 
-            mlflow.log_params({'model_type': best.model_type,
-                               'imbalance_strategy': best.imbalance_strategy,
-                               'decision_threshold': threshold, **tuned['best_params']})
-            mlflow.log_metric(f"cv_{train_cfg['selection_metric']}", tuned['best_score'])
-            mlflow.log_metrics({f'val_{k}': v for k, v in val_metrics.items()})
-            mlflow.log_metrics({f'test_{k}': v for k, v in test_metrics.items()})
-            mlflow.log_metrics({f'test_default_threshold_{k}': default_metrics[k]
-                                for k in ('precision', 'recall', 'f1')})
+                mlflow.log_params({'model_type': best.model_type,
+                                   'imbalance_strategy': best.imbalance_strategy,
+                                   'decision_threshold': threshold, **tuned['best_params']})
+                mlflow.log_metric(f"cv_{train_cfg['selection_metric']}", tuned['best_score'])
+                mlflow.log_metrics({f'val_{k}': v for k, v in val_metrics.items()})
+                mlflow.log_metrics({f'test_{k}': v for k, v in test_metrics.items()})
+                mlflow.log_metrics({f'test_default_threshold_{k}': default_metrics[k]
+                                    for k in ('precision', 'recall', 'f1')})
 
             # Quality gates
             gates = train_cfg.get('quality_gates', {})
             failed_gates = {k: test_metrics[k] for k, v in gates.items() if test_metrics[k] < v}
             mlflow.set_tag('quality_gates_passed', str(not failed_gates))
 
-            mlflow.sklearn.log_model(
-                model, name='model', serialization_format='cloudpickle',
-                signature=infer_signature(X_train.head(100), predict_proba(model, X_train.head(100))),
-                input_example=X_train.head(3),
-            )
+            with log_stage(logger, 'log model to MLflow'):
+                mlflow.sklearn.log_model(
+                    model, name='model', serialization_format='cloudpickle',
+                    signature=infer_signature(X_train.head(100), predict_proba(model, X_train.head(100))),
+                    input_example=X_train.head(3),
+                )
 
-            self._print_report(threshold, default_metrics, test_metrics, percentiles)
+            self._log_report(threshold, default_metrics, test_metrics, percentiles)
+            # Log the gate result; failures are logged before raising so they show up in the logs
             if failed_gates:
+                logger.error("Model failed quality gates %s: %s", gates, failed_gates)
                 raise RuntimeError(f"Model failed quality gates {gates}: {failed_gates}")
+            logger.info("Quality gates passed: %s", gates)
 
             metadata = {
                 'run_id': run.info.run_id,
@@ -160,6 +176,8 @@ class TrainingPipeline:
         for name, X_part, y_part in [('train', X_train, y_train), ('val', X_val, y_val),
                                      ('test', X_test, y_test)]:
             X_part.assign(**{target: y_part}).to_parquet(out_dir / f'{name}.parquet', index=False)
+        # Confirm where the splits were written
+        logger.info("Splits saved to %s", out_dir)
 
     def _save_model(self, model, metadata: dict):
         """Save the fitted pipeline and its metadata (threshold, metrics) for serving."""
@@ -168,23 +186,30 @@ class TrainingPipeline:
         joblib.dump(model, out_dir / 'model.joblib')
         with open(out_dir / 'model_metadata.json', 'w') as f:
             json.dump(metadata, f, indent=2, default=str)
-        print(f"Model saved to {out_dir / 'model.joblib'}")
+        # Confirm where the model was written
+        logger.info("Model saved to %s", out_dir / 'model.joblib')
 
     @staticmethod
-    def _print_report(threshold, default_metrics, test_metrics, percentiles):
-        """Print a short test-set summary."""
-        print("\n=== Test set results ===")
-        print(f"ROC-AUC: {test_metrics['roc_auc']:.4f}   PR-AUC: {test_metrics['pr_auc']:.4f}")
+    def _log_report(threshold, default_metrics, test_metrics, percentiles):
+        """Log a short test-set summary."""
+        logger.info("=== Test set results ===")
+        logger.info("ROC-AUC: %.4f   PR-AUC: %.4f", test_metrics['roc_auc'], test_metrics['pr_auc'])
         for label, m in [('threshold 0.50', default_metrics),
                          (f'tuned {threshold:.3f}', test_metrics)]:
-            print(f"{label:>15}: precision={m['precision']:.4f} recall={m['recall']:.4f} "
-                  f"F1={m['f1']:.4f}")
+            logger.info("%15s: precision=%.4f recall=%.4f F1=%.4f",
+                        label, m['precision'], m['recall'], m['f1'])
         for k in percentiles:
-            print(f"Top {k}%: conversion={test_metrics[f'conversion_at_{k}']:.1%} "
-                  f"lift={test_metrics[f'lift_at_{k}']:.2f}x")
+            logger.info("Top %s%%: conversion=%.1f%% lift=%.2fx",
+                        k, 100 * test_metrics[f'conversion_at_{k}'], test_metrics[f'lift_at_{k}'])
 
 
 if __name__ == '__main__':
-    pipeline = TrainingPipeline()
-    data_path = pipeline.config.get('data', {}).get('raw_path', 'data/raw/bank-full.csv')
-    pipeline.run(data_path=data_path)
+    # Configure logging once; on failure log the traceback a single time and exit non-zero
+    setup_logging()
+    try:
+        pipeline = TrainingPipeline()
+        data_path = pipeline.config.get('data', {}).get('raw_path', 'data/raw/bank-full.csv')
+        pipeline.run(data_path=data_path)
+    except Exception:
+        logger.exception("Training pipeline failed")
+        sys.exit(1)

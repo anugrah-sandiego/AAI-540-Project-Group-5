@@ -10,11 +10,12 @@ from sagemaker.model_monitor import DataCaptureConfig, DefaultModelMonitor
 from sagemaker.serializers import CSVSerializer
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 from datetime import datetime
 import time
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -249,11 +250,14 @@ def main():
     # Deploy model
     predictor = deployer.deploy_model(model_s3_uri)
 
-    print(f"Model deployed. Endpoint: {predictor.endpoint_name}")
+    # Log the endpoint name so it can be found later in CloudWatch
+    logger.info("Model deployed. Endpoint: %s", predictor.endpoint_name)
 
     # Example invocation
     # result = deployer.invoke_endpoint(predictor.endpoint_name, [30, 1500, 5, ...])
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

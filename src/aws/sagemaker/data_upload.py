@@ -7,8 +7,9 @@ import boto3
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -145,10 +146,13 @@ def main():
     # Upload bank marketing data
     uploaded_uris = uploader.upload_bank_data()
 
-    print("\n=== Upload Summary ===")
+    # Upload summary goes through the logger so it matches the rest of the output
+    logger.info("=== Upload Summary ===")
     for name, uri in uploaded_uris.items():
-        print(f"{name}: {uri}")
+        logger.info("%s: %s", name, uri)
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

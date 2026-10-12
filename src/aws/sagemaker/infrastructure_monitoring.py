@@ -6,10 +6,11 @@ import os
 import boto3
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 import json
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -472,10 +473,13 @@ def main():
 
     # List all dashboards
     dashboards = monitoring.list_dashboards()
-    print(f"\nCreated {len(dashboards)} dashboards:")
+    # List the dashboards through the logger instead of print
+    logger.info("Created %d dashboards:", len(dashboards))
     for dashboard in dashboards:
-        print(f"  - {dashboard}")
+        logger.info("  - %s", dashboard)
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

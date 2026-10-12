@@ -6,6 +6,7 @@ Every model is an imbalanced-learn Pipeline (feature engineering -> preprocessin
 SMOTE is only ever applied to the training folds, never to validation data.
 """
 
+import logging
 import mlflow
 from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline
@@ -21,6 +22,8 @@ from typing import Dict, Any, List
 from src.data_preprocessing.data_preprocessing import build_preprocessor
 from src.feature_engineering.feature_engineering import add_domain_features
 
+# Module logger; output format is set by setup_logging() in the entry point
+logger = logging.getLogger(__name__)
 
 IMBALANCE_STRATEGIES = ('none', 'class_weight', 'smote')
 CV_METRICS = ['roc_auc', 'average_precision', 'f1', 'precision', 'recall']
@@ -99,6 +102,8 @@ def compare_models(X_train: pd.DataFrame, y_train: pd.Series,
     """
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     rows = []
+    # Total runs, used for the [n/N] progress counter below
+    n_combinations = len(model_types) * len(imbalance_strategies)
 
     for model_type in model_types:
         for strategy in imbalance_strategies:
@@ -114,9 +119,11 @@ def compare_models(X_train: pd.DataFrame, y_train: pd.Series,
                                    'cv_folds': cv_folds})
                 mlflow.log_metrics({k: v for k, v in row.items() if k.startswith('cv_')})
 
-            print(f"  {model_type:<20} {strategy:<13} "
-                  f"AUC={row['cv_roc_auc']:.4f}  PR-AUC={row['cv_average_precision']:.4f}  "
-                  f"F1={row['cv_f1']:.4f}  recall={row['cv_recall']:.4f}")
+            # One progress line per combination so long runs can be followed live
+            logger.info("[%d/%d] %-20s %-13s AUC=%.4f  PR-AUC=%.4f  F1=%.4f  recall=%.4f",
+                        len(rows), n_combinations, model_type, strategy,
+                        row['cv_roc_auc'], row['cv_average_precision'],
+                        row['cv_f1'], row['cv_recall'])
 
     return pd.DataFrame(rows).sort_values('cv_average_precision', ascending=False).reset_index(drop=True)
 
@@ -175,6 +182,9 @@ def hyperparameter_tuning(X_train: pd.DataFrame, y_train: pd.Series,
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     search = RandomizedSearchCV(model, PARAM_DISTRIBUTIONS[model_type], n_iter=n_iter,
                                 scoring=scoring, cv=cv, n_jobs=-1, random_state=random_state)
+    # Log the search size up front, since tuning is the slowest step
+    logger.info("Randomized search: %d settings x %d folds = %d fits (scoring: %s)",
+                n_iter, cv_folds, n_iter * cv_folds, scoring)
     search.fit(X_train, y_train)
 
     return {

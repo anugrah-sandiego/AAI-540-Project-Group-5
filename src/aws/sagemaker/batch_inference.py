@@ -9,10 +9,11 @@ from sagemaker.sklearn.model import SKLearnModel
 from sagemaker.transformer import Transformer
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 from datetime import datetime
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -245,12 +246,15 @@ def main():
     # Run batch transform
     job_name = batch_inference.run_batch_transform(transformer, input_s3_uri)
 
-    print(f"Batch transform job started: {job_name}")
+    # Report job progress through the logger instead of print
+    logger.info("Batch transform job started: %s", job_name)
 
     # Wait for completion
     status_info = batch_inference.wait_for_transform_job(job_name)
-    print(f"Transform job completed: {status_info}")
+    logger.info("Transform job completed: %s", status_info)
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

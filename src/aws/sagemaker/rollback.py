@@ -7,9 +7,10 @@ import boto3
 import sagemaker
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 import time
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -104,8 +105,11 @@ def main():
     # previous_model = rollback.get_latest_approved_model(model_package_group_name)
     # rollback.rollback_endpoint(endpoint_name, previous_model)
 
-    print("Rollback utilities initialized")
+    # Use the logger so this message shares the standard log format
+    logger.info("Rollback utilities initialized")
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()

@@ -11,10 +11,11 @@ from sagemaker.session import Session
 from sagemaker.feature_store.feature_group import FeatureGroup
 from dotenv import load_dotenv
 import logging
+from src.utils.logging_config import setup_logging
 from datetime import datetime
 import time
 
-logging.basicConfig(level=logging.INFO)
+# Logging is configured once by setup_logging() when this file is run directly
 logger = logging.getLogger(__name__)
 
 
@@ -267,12 +268,15 @@ def main():
     # Create feature groups and ingest data
     feature_groups = feature_store.create_bank_marketing_feature_groups()
 
-    print("\n=== Feature Groups Created ===")
+    # Summarise the created groups through the logger instead of print
+    logger.info("=== Feature Groups Created ===")
     for name, fg in feature_groups.items():
         if fg:
-            print(f"{name}: {fg.name}")
-            print(f"Status: {fg.describe().get('FeatureGroupStatus')}")
+            logger.info("%s: %s (status: %s)", name, fg.name,
+                        fg.describe().get('FeatureGroupStatus'))
 
 
 if __name__ == "__main__":
+    # Set up shared logging only when run as a script, not on import
+    setup_logging()
     main()
