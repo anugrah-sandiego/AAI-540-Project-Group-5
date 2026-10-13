@@ -1,0 +1,29 @@
+# Keep the build context small and free of secrets and local state
+
+# Secrets and local environments
+.env
+.env.*
+venv/
+.venv/
+env/
+ENV/
+
+# Version control and CI (commit/branch are passed as build args instead)
+.git/
+.github/
+
+# Generated artefacts: produced by running the pipeline, not part of the image
+mlflow.db
+mlflow-docker.db
+mlruns/
+models/
+data/processed/
+*.log
+
+# Python / tooling caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+.idea/
+.vscode/

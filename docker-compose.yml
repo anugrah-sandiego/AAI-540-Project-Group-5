@@ -1,0 +1,48 @@
+# Development container: the project folder is mounted into /app, so code changes
+# are picked up without rebuilding, and git inside the container lets model
+# lineage detect uncommitted changes. Rebuild only when dependencies change:
+#   docker compose build
+#
+# Usage:
+#   docker compose run --rm test                          # run all tests
+#   docker compose run --rm train                         # train (refused if code is uncommitted)
+#   docker compose run --rm -e ALLOW_DIRTY=1 train        # experiment with uncommitted code
+#   docker compose up mlflow                              # MLflow UI on http://localhost:5000
+#   docker compose run --rm shell                         # interactive shell
+#
+# The production image is built separately: docker build -t aai540-bank-marketing .
+
+x-dev: &dev
+  build:
+    context: .
+    target: dev
+  image: aai540-bank-marketing:devenv
+  volumes:
+    - .:/app
+  working_dir: /app
+  environment:
+    # Container runs get their own MLflow store: the Windows mlflow.db records
+    # artifact paths like C:/Users/..., which do not exist inside Linux
+    MLFLOW_TRACKING_URI: sqlite:///mlflow-docker.db
+    MLFLOW_DISABLE_AGENT_HINT: "1"
+
+services:
+  test:
+    <<: *dev
+    command: python -m pytest tests -q
+
+  train:
+    <<: *dev
+    command: python -m src.pipelines.training_pipeline
+
+  mlflow:
+    <<: *dev
+    command: mlflow ui --backend-store-uri sqlite:///mlflow-docker.db --host 0.0.0.0 --port 5000
+    ports:
+      - "5000:5000"
+
+  shell:
+    <<: *dev
+    command: bash
+    stdin_open: true
+    tty: true
