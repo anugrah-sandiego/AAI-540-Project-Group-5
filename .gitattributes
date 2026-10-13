@@ -1,0 +1,3 @@
+# Keep data files byte-identical on every OS (no CRLF/LF conversion), so data
+# fingerprints in model lineage match on Windows, Linux, Docker and CI
+data/** -text
