@@ -46,6 +46,11 @@ evaluation:
 model:
   output_dir: models
 
+governance:
+  # Refuse to train from uncommitted code, so every saved model can be traced to
+  # a commit. Override for experiments with the ALLOW_DIRTY=1 environment variable.
+  allow_dirty: false
+
 mlflow:
   experiment_name: term_deposit_prediction
   tracking_uri: sqlite:///mlflow.db

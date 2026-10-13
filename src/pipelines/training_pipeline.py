@@ -1,17 +1,19 @@
 """
 Training pipeline for end-to-end model training.
 
-Steps: load -> validate -> stratified 70/15/15 split -> compare models and
-class-imbalance strategies with CV -> tune the best candidate -> choose the
-decision threshold on validation -> evaluate once on test -> quality gates ->
-log, register and save the model.
+Steps: collect lineage -> load -> validate -> stratified 70/15/15 split ->
+compare models and class-imbalance strategies with CV -> tune the best
+candidate -> choose the decision threshold on validation -> evaluate once on
+test -> quality gates -> log, register and save the model with its lineage.
 """
 
 import json
 import logging
+import os
 import sys
 import joblib
 import mlflow
+import mlflow.data
 import mlflow.sklearn
 from mlflow.models import infer_signature
 from pathlib import Path
@@ -23,6 +25,8 @@ from src.models.train_model import compare_models, hyperparameter_tuning
 from src.models.predict_model import predict_proba, find_best_threshold, evaluate_model
 from src.utils.helpers import load_config, ensure_dir
 from src.utils.logging_config import setup_logging, log_stage
+from src.utils.lineage import (collect_lineage, input_schema, resolve_allow_dirty,
+                               enforce_clean_code, UncommittedCodeError)
 
 # Module logger; output format is set by setup_logging() in the entry point
 logger = logging.getLogger(__name__)
@@ -56,11 +60,25 @@ class TrainingPipeline:
         add_features = self.config.get('feature_engineering', {}).get('add_domain_features', True)
         random_state = data_cfg.get('random_state', 42)
 
-        # Load and validate data (each stage below is timed and logged by log_stage)
+        # Record which code, data and environment this run uses, before any training
+        # (each stage below is timed and logged by log_stage)
+        with log_stage(logger, 'collect lineage'):
+            lineage = collect_lineage(data_path)
+            git = lineage['git']
+            logger.info("Lineage: commit %s (branch %s, source %s), data sha256 %s",
+                        git['commit'], git['branch'], git['source'], lineage['data']['sha256'])
+            # Stop here, before any training, if the code cannot be traced to a commit
+            allow_dirty = resolve_allow_dirty(
+                self.config.get('governance', {}).get('allow_dirty', False))
+            lineage['code_state'] = enforce_clean_code(git, allow_dirty)
+            lineage['allow_dirty'] = allow_dirty
+
+        # Load and validate data
         with log_stage(logger, 'load and validate data'):
             df = load_data(data_path, sep=data_cfg.get('separator', ','))
             quality_report = validate_schema(df)
             logger.info("Data quality: %s", quality_report)
+            lineage['data'].update(n_rows=len(df), n_columns=df.shape[1])
 
         # Drop leakage columns and split
         with log_stage(logger, 'split data'):
@@ -73,13 +91,17 @@ class TrainingPipeline:
             logger.info("Split sizes - train: %d, val: %d, test: %d",
                         len(X_train), len(X_val), len(X_test))
             self._save_splits(X_train, X_val, X_test, y_train, y_val, y_test)
+            # Columns and types the saved model expects at prediction time
+            schema = input_schema(X_train)
 
         numeric_cols = [c for c in NUMERIC_COLUMNS if c not in excluded]
         if add_features:
             numeric_cols += DOMAIN_FEATURES
         categorical_cols = [c for c in CATEGORICAL_COLUMNS if c not in excluded]
 
-        mlflow.set_tracking_uri(self.config['mlflow']['tracking_uri'])
+        # The standard MLFLOW_TRACKING_URI variable overrides config.yaml, e.g. so the
+        # dev container keeps its own store (see docker-compose.yml)
+        mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI') or self.config['mlflow']['tracking_uri'])
         mlflow.set_experiment(self.config['mlflow']['experiment_name'])
 
         with mlflow.start_run(run_name='training_pipeline') as run:
@@ -89,6 +111,7 @@ class TrainingPipeline:
                                'add_domain_features': add_features,
                                'n_train': len(X_train), 'n_val': len(X_val), 'n_test': len(X_test)})
             mlflow.log_dict(quality_report, 'data_quality_report.json')
+            self._log_lineage(lineage, schema, df, target_column)
 
             # Compare models and class-imbalance strategies
             with log_stage(logger, 'compare models and imbalance strategies (CV on train)'):
@@ -162,6 +185,10 @@ class TrainingPipeline:
                 'decision_threshold': threshold,
                 'excluded_features': excluded,
                 'test_metrics': test_metrics,
+                # Trace the saved model back to its code, data and environment
+                'trained_at': lineage['collected_at'],
+                'lineage': lineage,
+                'input_schema': schema,
             }
             self._save_model(model, metadata)
 
@@ -178,6 +205,28 @@ class TrainingPipeline:
             X_part.assign(**{target: y_part}).to_parquet(out_dir / f'{name}.parquet', index=False)
         # Confirm where the splits were written
         logger.info("Splits saved to %s", out_dir)
+
+    @staticmethod
+    def _log_lineage(lineage: dict, schema: list, df, target_column: str):
+        """Record lineage in the active MLflow run: searchable tags, JSON artifacts and the dataset."""
+        git, data = lineage['git'], lineage['data']
+        # Tags are searchable in the MLflow UI, e.g. tags.data_sha256 = '...'
+        mlflow.set_tags({
+            'git_commit': git['commit'] or 'unknown',
+            'git_branch': git['branch'] or 'unknown',
+            'git_dirty': str(git['dirty']),
+            'git_source': git['source'],
+            'data_sha256': data['sha256'],
+            # Lets a registry accept only models trained from committed code
+            'code_state': lineage['code_state'],
+            'allow_dirty': str(lineage['allow_dirty']),
+        })
+        mlflow.log_dict(lineage, 'lineage.json')
+        mlflow.log_dict(schema, 'input_schema.json')
+        # Register the raw dataset with the run so it shows under "Datasets" in the UI
+        dataset = mlflow.data.from_pandas(df, source=data['path'], name=Path(data['path']).stem,
+                                          targets=target_column)
+        mlflow.log_input(dataset, context='training', tags={'sha256': data['sha256']})
 
     def _save_model(self, model, metadata: dict):
         """Save the fitted pipeline and its metadata (threshold, metrics) for serving."""
@@ -210,6 +259,10 @@ if __name__ == '__main__':
         pipeline = TrainingPipeline()
         data_path = pipeline.config.get('data', {}).get('raw_path', 'data/raw/bank-full.csv')
         pipeline.run(data_path=data_path)
+    except UncommittedCodeError as exc:
+        # An expected policy refusal: a clear message is enough, no traceback
+        logger.error("%s", exc)
+        sys.exit(1)
     except Exception:
         logger.exception("Training pipeline failed")
         sys.exit(1)
