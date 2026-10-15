@@ -27,7 +27,10 @@ aws ecr describe-repositories --repository-names "$REPOSITORY" --region "$REGION
   || aws ecr create-repository --repository-name "$REPOSITORY" --region "$REGION" \
        --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
 
-docker build --target runtime --build-arg RUN_AS=root \
+# SageMaker needs a plain linux/amd64 image: no attestation manifests, which
+# would turn the push into an image index
+docker build --platform linux/amd64 --provenance=false --sbom=false \
+  --target runtime --build-arg RUN_AS=root \
   --build-arg GIT_COMMIT="$(git rev-parse HEAD)" --build-arg GIT_BRANCH="$(git branch --show-current)" \
   -t "$REGISTRY/$REPOSITORY:$TAG" .
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
