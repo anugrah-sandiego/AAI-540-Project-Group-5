@@ -16,11 +16,15 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 TAG=$(git rev-parse --short HEAD)
 
-aws() { MSYS_NO_PATHCONV=1 docker run --rm -i --env-file .env amazon/aws-cli "$@"; }
+# Load the keys whether .env lines start with `export` (CloudShell output) or not
+set -a; . <(tr -d '\r' < .env); set +a
+REGION=${AWS_REGION:-us-east-1}
+aws() {
+  MSYS_NO_PATHCONV=1 docker run --rm -i -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+    -e AWS_REGION="$REGION" amazon/aws-cli "$@"
+}
 
 ACCOUNT=$(aws sts get-caller-identity --query Account --output text | tr -d '\r')
-REGION=$(grep -E '^AWS_REGION=' .env | cut -d= -f2 | tr -d '\r')
-REGION=${REGION:-us-east-1}
 REGISTRY="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
 
 aws ecr describe-repositories --repository-names "$REPOSITORY" --region "$REGION" >/dev/null 2>&1 \
