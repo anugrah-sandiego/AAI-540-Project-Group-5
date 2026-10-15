@@ -188,37 +188,26 @@ AAI-540-Project-Group-5/
 │   │   ├── train_model.py                 # Model training with MLflow
 │   │   └── predict_model.py               # Model prediction and evaluation
 │   ├── utils/
-│   │   └── helpers.py                     # Helper utilities
+│   │   ├── helpers.py                     # Config loading
+│   │   ├── logging_config.py              # Shared logging setup
+│   │   └── lineage.py                     # Model lineage and uncommitted-code check
 │   ├── pipelines/
 │   │   └── training_pipeline.py            # End-to-end training pipeline
-│   └── aws/
-│       └── sagemaker/
-│           ├── data_upload.py              # S3 data upload
-│           ├── feature_store.py            # SageMaker Feature Store
-│           ├── training.py                 # SageMaker training jobs
-│           ├── deployment.py               # Endpoint deployment
-│           ├── batch_inference.py          # Batch transform jobs
-│           ├── model_registry.py           # Model Registry
-│           ├── monitoring.py               # Model monitoring
-│           ├── infrastructure_monitoring.py # CloudWatch dashboards
-│           ├── rollback.py                 # Rollback utilities
-│           └── scripts/
-│               ├── train.py                # Training script
-│               ├── inference.py            # Inference script
-│               └── batch_transform.py      # Batch transform script
+│   ├── serving/
+│   │   └── app.py                         # FastAPI prediction service
+│   └── aws/                               # SageMaker pipeline + aws-tools (docs/aws.md)
+│       ├── pipeline.py, cli.py, config.py, registry.py
+│       └── steps/                         # prepare, train, evaluate
+├── docker/                                # train / serve launch scripts for SageMaker
+├── scripts/push_image.sh                  # Push the runtime image to ECR
+├── docs/aws.md                            # AWS architecture and lab runbook
 ├── models/                                # model.joblib + model_metadata.json (generated)
-├── mlflow.db                              # MLflow tracking store (generated)
-├── tests/
-│   ├── __init__.py
-│   ├── test_data_preprocessing.py         # Preprocessing tests
-│   └── test_model_training.py             # Model training tests
-├── .github/
-│   └── workflows/
-│       └── ci-cd.yml                     # GitHub Actions CI/CD pipeline
-├── requirements.txt                       # Python dependencies
-├── Dockerfile                            # Container configuration
+├── tests/                                 # pytest suite; tests/aws needs the SageMaker SDK
+├── .github/workflows/ci-cd.yml            # CI: lint, tests, image build
+├── requirements.txt, constraints.txt      # Dependencies and exact tested versions
+├── requirements-aws.txt                   # aws-tools image dependencies
+├── Dockerfile, docker-compose.yml         # base / dev / aws / runtime images and services
 ├── config.yaml                           # Project configuration
-├── .env                                  # Environment variables
 └── README.md                             # This file
 ```
 
@@ -421,141 +410,19 @@ predicted = proba >= threshold
 
 ## AWS SageMaker Deployment
 
-This project includes comprehensive AWS SageMaker integration for production deployment. The implementation includes:
+A daily SageMaker Pipeline retrains and evaluates the model in AWS, running the
+project's own Docker image for every step; the full architecture, S3 layout and
+lab runbook are in [docs/aws.md](docs/aws.md).
 
-### SageMaker Components
-
-1. **Data Upload to S3** - Upload local data to S3 for SageMaker processing
-2. **Feature Store** - SageMaker Feature Groups for storing and retrieving features
-3. **Training Jobs** - Managed training jobs on SageMaker
-4. **Model Deployment** - Real-time endpoint deployment
-5. **Batch Inference** - Batch transform jobs for bulk predictions
-6. **Model Registry** - Model versioning and approval workflow
-7. **Model Monitoring** - Data capture and quality monitoring
-8. **Infrastructure Monitoring** - CloudWatch dashboards for system monitoring
-9. **CI/CD Pipeline** - GitHub Actions for automated deployment
-
-### Prerequisites
-
-Before deploying to SageMaker, ensure you have:
-
-- AWS account with appropriate IAM permissions
-- AWS credentials configured in `.env` file:
-  ```bash
-  AWS_ACCOUNT_ID=your_account_id
-  AWS_REGION=us-east-1
-  AWS_ROLE_ARN=arn:aws:iam::your_account_id:role/your_role
-  SAGEMAKER_OUTPUT_PATH=s3://your-bucket/path
-  ```
-- SageMaker execution role with necessary permissions
-- S3 bucket for data storage
-
-### AWS SageMaker Setup
-
-1. **Install AWS Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. **Configure AWS Credentials**
-   ```bash
-   # Edit .env file with your AWS credentials
-   ```
-
-3. **Upload Data to S3**
-   ```bash
-   python -m src.aws.sagemaker.data_upload
-   ```
-
-4. **Create Feature Store**
-   ```bash
-   python -m src.aws.sagemaker.feature_store
-   ```
-
-5. **Run SageMaker Training**
-   ```bash
-   python -m src.aws.sagemaker.training
-   ```
-
-6. **Register Model in Model Registry**
-   ```bash
-   python -m src.aws.sagemaker.model_registry
-   ```
-
-7. **Deploy Model to Endpoint**
-   ```bash
-   python -m src.aws.sagemaker.deployment
-   ```
-
-8. **Set Up Model Monitoring**
-   ```bash
-   python -m src.aws.sagemaker.monitoring
-   ```
-
-9. **Create Infrastructure Monitoring Dashboards**
-   ```bash
-   python -m src.aws.sagemaker.infrastructure_monitoring
-   ```
-
-### CI/CD Pipeline
-
-The project includes a GitHub Actions CI/CD pipeline (`.github/workflows/ci-cd.yml`) that:
-
-- Runs unit tests on every push and pull request
-- Builds and pushes Docker images
-- Deploys to SageMaker on main branch pushes
-- Includes rollback mechanism on deployment failure
-- Supports manual batch inference job triggers
-
-**Required GitHub Secrets:**
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_ACCOUNT_ID`
-- `AWS_ROLE_ARN`
-- `DOCKER_USERNAME`
-- `DOCKER_PASSWORD`
-
-
-
-### Monitoring Dashboards
-
-The system creates three CloudWatch dashboards:
-
-1. **ml-system-monitoring** - Comprehensive system-wide monitoring
-2. **training-jobs-monitoring** - Training job specific metrics
-3. **endpoint-monitoring** - Endpoint performance metrics
-
-Each dashboard includes:
-- Resource utilization (CPU, memory, GPU)
-- Latency metrics
-- Error rates
-- Request counts
-- S3 operations
-- Feature Store performance
-
-### Batch Inference
-
-To run batch inference on a dataset:
+- **Pipeline** (`src/aws/pipeline.py`): prepare data, skip if there is too little new data, train a challenger, compare it with the champion on data neither has seen, then register it pending approval or reject it with reasons.
+- **Serving** (`src/serving/app.py`): one FastAPI app answers SageMaker (`/ping`, `/invocations`) and local clients (`/predict`); every prediction returns the model's run, commit and threshold.
+- **Operations** (`aws-tools`, run in Docker with the lab keys in `.env`): `check`, `replay`, `deploy-pipeline`, `approve`, `rollback`, `pull-model`, `smoke-test`, `schedule`.
+- **CI** (`.github/workflows/ci-cd.yml`): lint, tests and an image build on every push; GitHub holds no AWS keys.
 
 ```bash
-python -m src.aws.sagemaker.batch_inference
+scripts/push_image.sh
+docker compose run --rm aws-tools deploy-pipeline --image-tag <tag> --start
 ```
-
-This will:
-- Create a transformer from the registered model
-- Process input data from S3
-- Output predictions to S3
-- Monitor job completion
-
-### Rollback
-
-In case of deployment failure, the CI/CD pipeline automatically triggers rollback:
-
-```bash
-python -m src.aws.sagemaker.rollback
-```
-
-This reverts the endpoint to the last approved model version.
 
 ---
 
@@ -638,15 +505,16 @@ mlflow:
 
 ### Environment Variables (.env)
 
-```bash
-MLFLOW_TRACKING_URI=sqlite:///mlflow.db
-MLFLOW_EXPERIMENT_NAME=term_deposit_prediction
-DATA_RAW_PATH=data/raw
-DATA_PROCESSED_PATH=data/processed
-DATA_EXTERNAL_PATH=data/external
-MODEL_TYPE=random_forest
-RANDOM_STATE=42
-```
+All optional. `.env` is git- and docker-ignored; never commit it.
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `LOG_LEVEL`, `LOG_FORMAT` | all entry points | Log detail; `text` or `json` |
+| `ALLOW_DIRTY` | training pipeline | `1` to train from uncommitted code as an experiment |
+| `MLFLOW_TRACKING_URI` | training pipeline | Overrides `mlflow.tracking_uri` in `config.yaml` |
+| `MODEL_DIR` | prediction service | Folder with `model.joblib` and `model_metadata.json` |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION` | aws-tools | Temporary AWS Academy keys (see docs/aws.md) |
+| `AWS_ROLE_ARN`, `AWS_BUCKET` | aws-tools | Override the default `LabRole` and SageMaker bucket |
 
 ---
 
