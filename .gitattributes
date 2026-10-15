@@ -1,3 +1,7 @@
 # Keep data files byte-identical on every OS (no CRLF/LF conversion), so data
 # fingerprints in model lineage match on Windows, Linux, Docker and CI
 data/** -text
+
+# Scripts run inside Linux containers; CRLF line endings would break their #! line
+docker/* text eol=lf
+*.sh text eol=lf

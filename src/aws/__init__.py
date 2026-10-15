@@ -1,1 +1,1 @@
-"""AWS integration modules for SageMaker deployment."""
+"""AWS SageMaker integration: daily training pipeline, registry and aws-tools CLI."""

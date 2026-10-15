@@ -9,6 +9,9 @@
 #   docker compose run --rm -e ALLOW_DIRTY=1 train        # experiment with uncommitted code
 #   docker compose up mlflow                              # MLflow UI on http://localhost:5000
 #   docker compose run --rm shell                         # interactive shell
+#   docker compose up api                                 # predictions on http://localhost:8080
+#   docker compose run --rm aws-tools --help              # AWS commands (lab keys from .env)
+#   docker compose run --rm aws-test                      # tests that need the SageMaker SDK
 #
 # The production image is built separately: docker build -t aai540-bank-marketing .
 
@@ -46,3 +49,30 @@ services:
     command: bash
     stdin_open: true
     tty: true
+
+  # Serves the model in models/ (fill it with `aws-tools pull-model` or a local train run)
+  api:
+    <<: *dev
+    command: uvicorn src.serving.app:app --host 0.0.0.0 --port 8080
+    environment:
+      MODEL_DIR: models
+    ports:
+      - "8080:8080"
+
+  aws-tools: &aws
+    build:
+      context: .
+      target: aws
+    image: aai540-bank-marketing:aws-tools
+    volumes:
+      - .:/app
+    working_dir: /app
+    # Temporary AWS Academy credentials; .env is git- and docker-ignored
+    env_file:
+      - path: .env
+        required: false
+    entrypoint: ["python", "-m", "src.aws.cli"]
+
+  aws-test:
+    <<: *aws
+    entrypoint: ["python", "-m", "pytest", "tests/aws", "-q"]

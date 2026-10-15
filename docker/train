@@ -1,0 +1,3 @@
+#!/bin/sh
+# SageMaker starts training images as `train`
+exec python -m src.aws.steps.train
