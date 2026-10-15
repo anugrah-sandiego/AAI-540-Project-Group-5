@@ -5,7 +5,12 @@ data:
   separator: ";"
   processed_path: data/processed
   target_column: y
-  # 70% train / 15% validation / 15% test, stratified on the target
+  # 70% train / 15% validation / 15% test. The file is in date order:
+  #   time   - oldest rows train, newest rows test; CV folds also follow time.
+  #            Scores reflect predicting future customers (no look-ahead bias)
+  #   random - shuffled and stratified on the target; mixes dates, so scores
+  #            are optimistic (the original benchmark: ROC-AUC 0.79)
+  split_strategy: time
   val_size: 0.15
   test_size: 0.15
   random_state: 42
