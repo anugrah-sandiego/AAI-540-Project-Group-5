@@ -7,13 +7,13 @@ AWS as LabRole instead. Run inside the aws-tools container:
     docker compose run --rm aws-tools <command> [options]
 
     check            show identity, role and whether the scheduler may use the role
-    replay           upload the next daily batches of bank-full.csv to the raw zone
+    replay           upload the next batches of bank-full.csv to the raw zone
     deploy-pipeline  create or update the pipeline for an image tag (optionally start it)
     approve          approve the newest pending model version (it becomes champion)
     rollback         reject the champion so the previous approved version takes over
     pull-model       download the champion for the local API
     smoke-test       deploy the champion to a serverless endpoint, score one record, delete it
-    schedule         run the pipeline once at a time, daily, or turn the schedule off
+    schedule         run the pipeline once at a time, yearly, or turn the schedule off
 """
 
 import argparse
@@ -21,6 +21,7 @@ import io
 import json
 import logging
 import tarfile
+from datetime import datetime
 
 import pandas as pd
 from botocore.exceptions import ClientError
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 DATA_FILE = 'data/raw/bank-full.csv'
 SEPARATOR = ';'
-SCHEDULE_NAME = 'bank-marketing-daily'
+SCHEDULE_NAME = 'bank-marketing-retrain'
 ENDPOINT_NAME = 'bank-marketing-smoke-test'
 
 
@@ -89,7 +90,7 @@ def replay(cfg: AwsConfig, aws, batches: int, initial: int, size: int) -> None:
         s3.put_object(Bucket=cfg.bucket, Key=checkpoint_key, Body=b'{}')
 
 
-def deploy_pipeline(cfg: AwsConfig, aws, image_tag: str, start: bool, full: bool) -> None:
+def deploy_pipeline(cfg: AwsConfig, aws, image_tag: str, start: bool, quick: bool) -> None:
     sagemaker = aws.client('sagemaker')
     ensure_bucket(cfg, aws.client('s3'))
     try:
@@ -102,7 +103,7 @@ def deploy_pipeline(cfg: AwsConfig, aws, image_tag: str, start: bool, full: bool
     pipeline.upsert(role_arn=cfg.role_arn)
     print(f"Pipeline {PIPELINE_NAME} now runs image {cfg.image_uri(image_tag)}")
     if start:
-        parameters = {'QuickTraining': 'false'} if full else {}
+        parameters = {'QuickTraining': 'true'} if quick else {}
         print(f"Started {pipeline.start(parameters=parameters).arn}")
 
 
@@ -171,7 +172,7 @@ def smoke_test(cfg: AwsConfig, aws) -> None:
         print("Endpoint, endpoint config and model deleted")
 
 
-def schedule(cfg: AwsConfig, aws, once: str, daily: bool, off: bool) -> None:
+def schedule(cfg: AwsConfig, aws, once: str, yearly: str, off: bool) -> None:
     scheduler = aws.client('scheduler')
     if off:
         scheduler.delete_schedule(Name=SCHEDULE_NAME)
@@ -181,8 +182,11 @@ def schedule(cfg: AwsConfig, aws, once: str, daily: bool, off: bool) -> None:
     target = {'Arn': pipeline_arn, 'RoleArn': cfg.role_arn,
               'SageMakerPipelineParameters': {'PipelineParameterList': []},
               'RetryPolicy': {'MaximumRetryAttempts': 2, 'MaximumEventAgeInSeconds': 3600}}
-    expression = 'cron(0 6 * * ? *)' if daily else f'at({once})'
-    extra = {} if daily else {'ActionAfterCompletion': 'DELETE'}
+    if yearly:
+        day = datetime.strptime(f'2000-{yearly}', '%Y-%m-%d')  # leap year, so 02-29 parses
+        expression, extra = f'cron(0 6 {day.day} {day.month} ? *)', {}
+    else:
+        expression, extra = f'at({once})', {'ActionAfterCompletion': 'DELETE'}
     scheduler.create_schedule(Name=SCHEDULE_NAME, ScheduleExpression=expression,
                               ScheduleExpressionTimezone='UTC', FlexibleTimeWindow={'Mode': 'OFF'},
                               Target=target, **extra)
@@ -203,7 +207,7 @@ def main() -> None:
     deploy_args = commands.add_parser('deploy-pipeline')
     deploy_args.add_argument('--image-tag', required=True, help='tag printed by scripts/push_image.sh')
     deploy_args.add_argument('--start', action='store_true')
-    deploy_args.add_argument('--full', action='store_true', help='with --start: compare all 12 models')
+    deploy_args.add_argument('--quick', action='store_true', help='with --start: random forest only, short search')
     commands.add_parser('approve')
     commands.add_parser('rollback')
     pull_args = commands.add_parser('pull-model')
@@ -211,7 +215,7 @@ def main() -> None:
     commands.add_parser('smoke-test')
     schedule_args = commands.add_parser('schedule').add_mutually_exclusive_group(required=True)
     schedule_args.add_argument('--once', metavar='YYYY-MM-DDTHH:MM:SS', help='one run at this UTC time')
-    schedule_args.add_argument('--daily', action='store_true', help='every day at 06:00 UTC')
+    schedule_args.add_argument('--yearly', metavar='MM-DD', help='every year on this day at 06:00 UTC')
     schedule_args.add_argument('--off', action='store_true')
     args = parser.parse_args()
 
@@ -222,7 +226,7 @@ def main() -> None:
     elif args.command == 'replay':
         replay(cfg, aws, args.batches, args.initial_rows, args.batch_rows)
     elif args.command == 'deploy-pipeline':
-        deploy_pipeline(cfg, aws, args.image_tag, args.start, args.full)
+        deploy_pipeline(cfg, aws, args.image_tag, args.start, args.quick)
     elif args.command == 'approve':
         approve(aws)
     elif args.command == 'rollback':
@@ -232,7 +236,7 @@ def main() -> None:
     elif args.command == 'smoke-test':
         smoke_test(cfg, aws)
     else:
-        schedule(cfg, aws, args.once, args.daily, args.off)
+        schedule(cfg, aws, args.once, args.yearly, args.off)
 
 
 if __name__ == '__main__':

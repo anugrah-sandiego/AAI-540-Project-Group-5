@@ -1,4 +1,4 @@
-# AWS: daily training pipeline
+# AWS: yearly training pipeline
 
 The laptop sets things up with temporary AWS Academy keys; AWS then runs on its
 own as `LabRole`. Every SageMaker job runs the project's own Docker image, so the
@@ -9,7 +9,7 @@ laptop (Docker, .env keys)            AWS (runs as LabRole)
 --------------------------            ---------------------------------------------------------
 scripts/push_image.sh  ------------>  ECR: aai540-bank-marketing:<commit>
 aws-tools replay       ------------>  S3 raw/ batches
-aws-tools deploy-pipeline  -------->  SageMaker Pipeline "bank-marketing-daily"
+aws-tools deploy-pipeline  -------->  SageMaker Pipeline "bank-marketing-retrain"
 aws-tools schedule     ------------>  EventBridge Scheduler  ->  pipeline run:
                                         PrepareData -> EnoughNewData? -> TrainChallenger
                                         -> EvaluateChallenger -> GatesPassed?
@@ -41,11 +41,11 @@ aws-tools smoke-test  ------------>  serverless endpoint (created, called, delet
 | `runs/<execution id>/{train,eval,report,evaluation}/` | Per-run dataset version and decision |
 | `models/` | Training job outputs (`model.tar.gz`, MLflow run) |
 
-## How a daily run decides
+## How a run decides
 
 1. **PrepareData** rebuilds the dataset from all accepted batches (idempotent). Batches seen before are training data; batches new in this run are evaluation data.
 2. **EnoughNewData**: skips training when the new batches have fewer than `MinNewRows` (300) rows.
-3. **TrainChallenger** runs the training pipeline. With `QuickTraining=true` (default) it reuses random forest with a short search; set it to `false` for the full 12-model comparison.
+3. **TrainChallenger** runs the training pipeline. By default it runs the full 12-model comparison; `QuickTraining=true` (or `deploy-pipeline --start --quick`) reuses random forest with a short search for cheaper test runs.
 4. **EvaluateChallenger** scores the challenger and the champion on the new data neither has seen. It passes when the quality gates in `config.yaml` hold, PR-AUC is no more than 0.01 below the champion's, and recall in every age band is at least 80% of overall recall.
 5. **GatesPassed** registers the challenger as *pending approval*, or fails the run with the reasons in `evaluation.json`.
 
@@ -70,7 +70,9 @@ docker compose run --rm aws-tools deploy-pipeline --image-tag <tag> --start
 docker compose run --rm aws-tools approve                    # newest pending -> champion
 docker compose run --rm aws-tools smoke-test                 # serverless endpoint, deleted afterwards
 docker compose run --rm aws-tools replay                     # next day
-docker compose run --rm aws-tools schedule --once 2026-10-16T10:00:00
+docker compose run --rm aws-tools schedule --once 2026-10-16T10:00:00   # one run
+docker compose run --rm aws-tools schedule --yearly 10-20                # every 20 Oct, 06:00 UTC
+docker compose run --rm aws-tools schedule --off                         # remove the schedule
 docker compose run --rm aws-tools pull-model && docker compose up api
 docker compose run --rm aws-tools rollback                   # if the champion misbehaves
 ```

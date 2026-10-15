@@ -410,7 +410,7 @@ predicted = proba >= threshold
 
 ## AWS SageMaker Deployment
 
-A daily SageMaker Pipeline retrains and evaluates the model in AWS, running the
+A yearly SageMaker Pipeline retrains and evaluates the model in AWS, running the
 project's own Docker image for every step; the full architecture, S3 layout and
 lab runbook are in [docs/aws.md](docs/aws.md).
 

@@ -23,8 +23,8 @@ from src.utils.logging_config import setup_logging
 
 ML_ROOT = Path('/opt/ml')
 
-# Daily runs reuse the known-good model family with a short search; a full
-# comparison of all models is run by setting the `quick` hyperparameter to false
+# Runs compare all models by default; setting the `quick` hyperparameter to true
+# reuses the known-good model family with a short search (cheaper test runs)
 QUICK_TRAINING = {'candidate_models': ['random_forest'], 'imbalance_strategies': ['none'],
                   'tuning_iterations': 5, 'cv_folds': 3}
 
@@ -45,7 +45,7 @@ def main() -> None:
     setup_logging()
     hyperparameters_file = ML_ROOT / 'input' / 'config' / 'hyperparameters.json'
     hyperparameters = json.loads(hyperparameters_file.read_text()) if hyperparameters_file.exists() else {}
-    quick = str(hyperparameters.get('quick', 'true')).lower() == 'true'
+    quick = str(hyperparameters.get('quick', 'false')).lower() == 'true'
 
     config = training_config(load_config(PROJECT_ROOT / 'config.yaml'), quick)
     config_path = Path(tempfile.gettempdir()) / 'sagemaker-config.yaml'

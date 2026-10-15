@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import boto3
 
 PREFIX = 'aai540/bank-marketing'
-PIPELINE_NAME = 'bank-marketing-daily'
+PIPELINE_NAME = 'bank-marketing-retrain'
 MODEL_GROUP = 'bank-marketing-models'
 ECR_REPOSITORY = 'aai540-bank-marketing'
 

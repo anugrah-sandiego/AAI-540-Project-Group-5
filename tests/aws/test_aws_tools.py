@@ -67,7 +67,7 @@ def test_training_only_follows_enough_new_data_and_registration_only_passing_gat
 
 def test_pipeline_parameters_have_safe_defaults(definition):
     defaults = {parameter['Name']: parameter['DefaultValue'] for parameter in definition['Parameters']}
-    assert defaults == {'InstanceType': 'ml.m5.large', 'MinNewRows': 300, 'QuickTraining': 'true'}
+    assert defaults == {'InstanceType': 'ml.m5.large', 'MinNewRows': 300, 'QuickTraining': 'false'}
 
 
 @pytest.mark.parametrize('index, expected', [(0, slice(0, 31500)), (1, slice(31500, 31850)), (3, slice(32200, 32550))])
