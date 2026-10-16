@@ -96,37 +96,25 @@ def validate_schema(df: pd.DataFrame) -> dict:
 
 
 def split_data(X: pd.DataFrame, y: pd.Series, val_size: float = 0.15,
-               test_size: float = 0.15, random_state: int = 42, strategy: str = 'random'
+               test_size: float = 0.15, random_state: int = 42
                ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame,
                           pd.Series, pd.Series, pd.Series]:
     """
-    Train / validation / test split.
+    Stratified train / validation / test split.
 
-    The source file is ordered chronologically. 'time' keeps that order (oldest
-    rows train, newest rows test), so the model is never scored on customers
-    older than those it learned from. 'random' shuffles with stratification,
-    which keeps the positive rate equal across splits but mixes the dates
-    (look-ahead bias), so its scores are optimistic for future customers.
+    The source file is ordered chronologically and the positive rate rises
+    sharply towards the end, so rows are shuffled before splitting.
 
     Args:
-        X: Feature DataFrame, in date order
+        X: Feature DataFrame
         y: Target Series
         val_size: Fraction of all rows used for validation
         test_size: Fraction of all rows used for the final test
-        random_state: Random seed ('random' only)
-        strategy: 'time' or 'random'
+        random_state: Random seed
 
     Returns:
         Tuple of (X_train, X_val, X_test, y_train, y_val, y_test)
     """
-    if strategy == 'time':
-        val_start = round(len(X) * (1 - val_size - test_size))
-        test_start = round(len(X) * (1 - test_size))
-        return (X.iloc[:val_start], X.iloc[val_start:test_start], X.iloc[test_start:],
-                y.iloc[:val_start], y.iloc[val_start:test_start], y.iloc[test_start:])
-    if strategy != 'random':
-        raise ValueError(f"Unknown split strategy: {strategy}")
-
     X_train_val, X_test, y_train_val, y_test = train_test_split(
         X, y, test_size=test_size, stratify=y, random_state=random_state
     )

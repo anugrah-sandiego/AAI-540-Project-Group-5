@@ -7,7 +7,7 @@ import numpy as np
 from src.data_ingestion.data_ingestion import NUMERIC_COLUMNS, CATEGORICAL_COLUMNS
 from src.data_preprocessing.data_preprocessing import encode_target
 from src.feature_engineering.feature_engineering import DOMAIN_FEATURES
-from src.models.train_model import build_model, make_cv
+from src.models.train_model import build_model
 from src.models.predict_model import find_best_threshold, lift_at_k, evaluate_model, predict_model
 from tests.test_data_preprocessing import make_raw_df
 
@@ -43,11 +43,6 @@ def test_smote_strategy_adds_resampling_step():
 def test_unknown_strategy_raises():
     with pytest.raises(ValueError):
         build_model('random_forest', NUMERIC, CATEGORICAL_COLUMNS, 'undersample')
-
-
-def test_time_ordered_cv_validates_on_later_rows_only():
-    for train_idx, val_idx in make_cv(3, time_ordered=True, random_state=42).split(np.zeros(100)):
-        assert train_idx.max() < val_idx.min()
 
 
 def test_find_best_threshold_separable_data():

@@ -60,8 +60,6 @@ class TrainingPipeline:
         train_cfg = self.config['training']
         add_features = self.config.get('feature_engineering', {}).get('add_domain_features', True)
         random_state = data_cfg.get('random_state', 42)
-        split_strategy = data_cfg.get('split_strategy', 'random')
-        time_ordered = split_strategy == 'time'
 
         # Record which code, data and environment this run uses, before any training
         # (each stage below is timed and logged by log_stage)
@@ -89,9 +87,9 @@ class TrainingPipeline:
             X = df.drop(columns=[target_column] + excluded)
             y = encode_target(df[target_column])
             X_train, X_val, X_test, y_train, y_val, y_test = split_data(
-                X, y, data_cfg['val_size'], data_cfg['test_size'], random_state, split_strategy
+                X, y, data_cfg['val_size'], data_cfg['test_size'], random_state
             )
-            logger.info("Split (%s) sizes - train: %d, val: %d, test: %d", split_strategy,
+            logger.info("Split sizes - train: %d, val: %d, test: %d",
                         len(X_train), len(X_val), len(X_test))
             self._save_splits(X_train, X_val, X_test, y_train, y_val, y_test)
             # Columns and types the saved model expects at prediction time
@@ -111,7 +109,7 @@ class TrainingPipeline:
             # Log the run id so this run is easy to find in the MLflow UI
             logger.info("MLflow run id: %s", run.info.run_id)
             mlflow.log_params({'excluded_features': ','.join(excluded),
-                               'add_domain_features': add_features, 'split_strategy': split_strategy,
+                               'add_domain_features': add_features,
                                'n_train': len(X_train), 'n_val': len(X_val), 'n_test': len(X_test)})
             mlflow.log_dict(quality_report, 'data_quality_report.json')
             self._log_lineage(lineage, schema, df, target_column)
@@ -121,7 +119,7 @@ class TrainingPipeline:
                 comparison = compare_models(
                     X_train, y_train, numeric_cols, categorical_cols,
                     train_cfg['candidate_models'], train_cfg['imbalance_strategies'],
-                    train_cfg['cv_folds'], add_features, random_state, time_ordered
+                    train_cfg['cv_folds'], add_features, random_state
                 )
                 mlflow.log_table(comparison, 'model_comparison.json')
                 best = comparison.iloc[0]
@@ -132,8 +130,7 @@ class TrainingPipeline:
                 tuned = hyperparameter_tuning(
                     X_train, y_train, best.model_type, numeric_cols, categorical_cols,
                     best.imbalance_strategy, train_cfg['tuning_iterations'],
-                    train_cfg['selection_metric'], train_cfg['cv_folds'], add_features, random_state,
-                    time_ordered
+                    train_cfg['selection_metric'], train_cfg['cv_folds'], add_features, random_state
                 )
                 model = tuned['best_model']
                 logger.info("Best params: %s (CV %s: %.4f)", tuned['best_params'],
@@ -197,8 +194,6 @@ class TrainingPipeline:
                 'params': tuned['best_params'],
                 'decision_threshold': threshold,
                 'excluded_features': excluded,
-                # Which split produced test_metrics: 'time' scores are out-of-time
-                'split_strategy': split_strategy,
                 'test_metrics': test_metrics,
                 'refit_on_all_data': refit,
                 # Trace the saved model back to its code, data and environment

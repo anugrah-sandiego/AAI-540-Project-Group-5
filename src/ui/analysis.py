@@ -13,6 +13,7 @@ import pandas as pd
 
 AGE_BANDS = [0, 30, 40, 50, 60, 200]
 AGE_LABELS = ['under 30', '30-39', '40-49', '50-59', '60 and over']
+MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
 
 def roc_auc(y: pd.Series, score: pd.Series) -> float:
@@ -63,14 +64,13 @@ def position_among(probability: float, scored: pd.DataFrame) -> float:
 
 
 def actual_vs_predicted(scored: pd.DataFrame, group: pd.Series) -> pd.DataFrame:
-    """Actual subscriber rate next to the average predicted probability, per group (in group order)."""
-    return scored.groupby(group, sort=False).agg(actual=('y', 'mean'), predicted=('probability', 'mean'))
+    """Actual subscriber rate next to the average predicted probability, per group (groups sorted)."""
+    return scored.groupby(group, observed=True).agg(actual=('y', 'mean'), predicted=('probability', 'mean'))
 
 
-def time_periods(month: pd.Series) -> pd.Series:
-    """Label each contact month in file order (rows are in date order; the data has no year column)."""
-    period = (month != month.shift()).cumsum()
-    return period.map(lambda p: f'{p:02d}') + ' ' + month
+def month_of_year(month: pd.Series) -> pd.Series:
+    """Contact month in calendar order (the data has no year, so years are combined)."""
+    return pd.Categorical(month, categories=MONTHS, ordered=True)
 
 
 def segment_rates(test: pd.DataFrame, column: pd.Series) -> pd.DataFrame:

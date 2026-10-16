@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, position_among,
-                             rank, roc_auc, segment_rates, time_periods)
+                             month_of_year, rank, roc_auc, segment_rates)
 
 API_URL = os.getenv('API_URL', 'http://localhost:8080')
 TEST_DATA = Path(os.getenv('TEST_DATA', 'data/processed/test.parquet'))
@@ -137,10 +137,10 @@ with data_tab:
     cols = st.columns(3)
     cols[0].metric('Customers', f'{len(test):,}')
     cols[1].metric('Subscribed', f"{test['y'].mean():.1%}")
-    cols[2].metric('Contact months covered', time_periods(test['month']).nunique())
-    st.markdown('**Subscriber rate by contact month** (in date order)')
-    by_month = test['y'].groupby(time_periods(test['month']), sort=False).mean()
-    st.line_chart(by_month.rename('subscriber rate'))
+    cols[2].metric('Subscribers', f"{int(test['y'].sum()):,}")
+    st.markdown('**Subscriber rate by month of year** (years combined; the data has no year column)')
+    by_month = test['y'].groupby(month_of_year(test['month']), observed=True).mean()
+    st.bar_chart(by_month.rename('subscriber rate'), sort=False)
     segments = {'Previous campaign outcome': test['poutcome'], 'Housing loan': test['housing'],
                 'Contact type': test['contact'], 'Age band': age_band(test['age']), 'Job': test['job']}
     left, right = st.columns(2)
@@ -173,13 +173,12 @@ with model_tab:
         st.markdown('**Lift by tenth of the ranked list** (1.0 = random calling)')
         st.bar_chart(gains['lift'])
     st.markdown('**Actual vs predicted**: real subscriber rate next to the average predicted probability')
-    st.caption('Predicted probabilities sit below the actual rates because the model learned from older months, '
-               'when far fewer customers subscribed. What matters for calling is the order: higher predictions '
-               'still mean more subscribers.')
+    st.caption('Close bars mean the probabilities can be read as real chances; actual rates falling from the '
+               'first tenth to the last mean the ranking works.')
     left, right = st.columns(2)
     with left:
-        st.markdown('**By contact month** (in date order)')
-        st.line_chart(actual_vs_predicted(scored, time_periods(scored['month'])))
+        st.markdown('**By month of year** (years combined)')
+        st.bar_chart(actual_vs_predicted(scored, month_of_year(scored['month'])), stack=False, sort=False)
     with right:
         st.markdown('**By tenth of the ranked list** (1 = highest predictions)')
         ranked = rank(scored)

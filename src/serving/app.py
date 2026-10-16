@@ -87,7 +87,6 @@ def model_info() -> Dict[str, Any]:
     lineage = metadata['lineage']
     return {**get_predictor().version,
             'model_type': metadata.get('model_type'),
-            'split_strategy': metadata.get('split_strategy'),
             'refit_on_all_data': metadata.get('refit_on_all_data', False),
             'test_metrics': metadata.get('test_metrics', {}),
             'branch': lineage['git'].get('branch'),

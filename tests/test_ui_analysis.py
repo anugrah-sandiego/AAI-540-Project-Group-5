@@ -6,7 +6,7 @@ import pytest
 from sklearn.metrics import roc_auc_score
 
 from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, position_among,
-                             rank, roc_auc, segment_rates, time_periods)
+                             month_of_year, rank, roc_auc, segment_rates)
 
 
 def scored_customers(n=100, seed=0):
@@ -53,9 +53,9 @@ def test_position_among_test_customers():
     assert position_among(0.05, scored) == 100.0
 
 
-def test_time_periods_keep_repeated_months_apart():
-    months = pd.Series(['nov', 'nov', 'dec', 'jan', 'nov'])
-    assert time_periods(months).tolist() == ['01 nov', '01 nov', '02 dec', '03 jan', '04 nov']
+def test_months_follow_the_calendar():
+    months = month_of_year(pd.Series(['nov', 'jan', 'may']))
+    assert list(pd.Series(months).sort_values()) == ['jan', 'may', 'nov']
 
 
 def test_segment_rates_and_age_bands():

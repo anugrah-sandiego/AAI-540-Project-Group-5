@@ -65,22 +65,6 @@ def test_split_is_70_15_15_stratified_and_disjoint():
         assert abs(part.mean() - y.mean()) < 0.02
 
 
-def test_time_split_trains_on_oldest_rows_and_tests_on_newest():
-    df = make_raw_df(n=1000)
-    X, y = df.drop(columns='y'), encode_target(df['y'])
-    X_train, X_val, X_test, *_ = split_data(X, y, 0.15, 0.15, 42, strategy='time')
-
-    assert len(X_train) == 700 and len(X_val) == 150 and len(X_test) == 150
-    # Every validation row comes after every training row, every test row after both
-    assert X_train.index.max() < X_val.index.min() and X_val.index.max() < X_test.index.min()
-
-
-def test_unknown_split_strategy_raises():
-    df = make_raw_df()
-    with pytest.raises(ValueError, match='Unknown split strategy'):
-        split_data(df.drop(columns='y'), encode_target(df['y']), strategy='by_month')
-
-
 def test_encode_target():
     assert encode_target(pd.Series(['yes', 'no', 'no'])).tolist() == [1, 0, 0]
 

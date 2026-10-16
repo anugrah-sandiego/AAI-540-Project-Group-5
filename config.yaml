@@ -5,12 +5,7 @@ data:
   separator: ";"
   processed_path: data/processed
   target_column: y
-  # 70% train / 15% validation / 15% test. The file is in date order:
-  #   time   - oldest rows train, newest rows test; CV folds also follow time.
-  #            Scores reflect predicting future customers (no look-ahead bias)
-  #   random - shuffled and stratified on the target; mixes dates, so scores
-  #            are optimistic (the original benchmark: ROC-AUC 0.79)
-  split_strategy: time
+  # 70% train / 15% validation / 15% test, stratified on the target
   val_size: 0.15
   test_size: 0.15
   random_state: 42
@@ -27,29 +22,27 @@ training:
   # Primary selection metric: PR-AUC is threshold-independent and robust to the
   # ~11.7% positive rate, unlike accuracy
   selection_metric: average_precision
-  # Logistic regression only: under the time split it ranked newer customers best
-  # (ROC-AUC 0.675 vs 0.554 for the 12-candidate search). decision_tree,
-  # random_forest and gradient_boosting are still available here.
   candidate_models:
     - logistic_regression
-  # Class-imbalance strategies compared for every candidate model (smote also available)
+    - decision_tree
+    - random_forest
+    - gradient_boosting
+  # Class-imbalance strategies compared for every candidate model
   imbalance_strategies:
     - none
     - class_weight
-  tuning_iterations: 10
+    - smote
+  tuning_iterations: 20
   # Decision threshold is chosen on the validation set to maximise this metric
   threshold_metric: f1
   # Refit the chosen model on all rows before saving. Off locally, so the saved
   # model matches its reported test score; on for SageMaker (src/aws/steps/train.py),
   # where new batches are the out-of-time test
   refit_on_all_data: false
-  # Minimum test-set quality gates; the pipeline fails if these are not met.
-  # Proposed from the time-split baseline (logistic regression: ROC-AUC 0.675,
-  # lift@10 1.77), pending team agreement. The previous 0.75 / 2.5 came from the
-  # shuffled split, which overstates performance on future customers.
+  # Minimum test-set quality gates; the pipeline fails if these are not met
   quality_gates:
-    roc_auc: 0.60
-    lift_at_10: 1.1
+    roc_auc: 0.75
+    lift_at_10: 2.5
 
 evaluation:
   lift_percentiles: [10, 20, 30]

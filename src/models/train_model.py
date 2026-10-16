@@ -13,7 +13,7 @@ from imblearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, cross_validate, RandomizedSearchCV
+from sklearn.model_selection import StratifiedKFold, cross_validate, RandomizedSearchCV
 from sklearn.preprocessing import FunctionTransformer
 from scipy.stats import loguniform, randint, uniform
 import pandas as pd
@@ -43,18 +43,6 @@ def _make_classifier(model_type: str, class_weight, random_state: int):
         # Histogram-based gradient boosting supports class_weight natively
         return HistGradientBoostingClassifier(class_weight=class_weight, random_state=random_state)
     raise ValueError(f"Unknown model type: {model_type}")
-
-
-def make_cv(cv_folds: int, time_ordered: bool, random_state: int):
-    """
-    CV splitter matching the train/test split.
-
-    Time-ordered folds always validate on rows later than those they train on
-    (expanding window); shuffled stratified folds mix the dates.
-    """
-    if time_ordered:
-        return TimeSeriesSplit(n_splits=cv_folds)
-    return StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
 
 
 def build_model(model_type: str, numeric_cols: List[str], categorical_cols: List[str],
@@ -92,9 +80,11 @@ def compare_models(X_train: pd.DataFrame, y_train: pd.Series,
                    numeric_cols: List[str], categorical_cols: List[str],
                    model_types: List[str], imbalance_strategies: List[str],
                    cv_folds: int = 5, add_features: bool = True,
-                   random_state: int = 42, time_ordered: bool = False) -> pd.DataFrame:
+                   random_state: int = 42) -> pd.DataFrame:
     """
     Cross-validate every model / imbalance-strategy combination and log each to MLflow.
+
+    Folds are shuffled because the source data is ordered by date.
 
     Args:
         X_train: Training features
@@ -106,12 +96,11 @@ def compare_models(X_train: pd.DataFrame, y_train: pd.Series,
         cv_folds: Number of CV folds
         add_features: Whether to add domain features
         random_state: Random seed
-        time_ordered: Validate each fold on later rows than it trains on
 
     Returns:
         DataFrame of mean CV metrics, one row per combination, best first
     """
-    cv = make_cv(cv_folds, time_ordered, random_state)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     rows = []
     # Total runs, used for the [n/N] progress counter below
     n_combinations = len(model_types) * len(imbalance_strategies)
@@ -168,8 +157,7 @@ def hyperparameter_tuning(X_train: pd.DataFrame, y_train: pd.Series,
                           model_type: str, numeric_cols: List[str], categorical_cols: List[str],
                           imbalance_strategy: str = 'none', n_iter: int = 20,
                           scoring: str = 'average_precision', cv_folds: int = 5,
-                          add_features: bool = True, random_state: int = 42,
-                          time_ordered: bool = False) -> Dict[str, Any]:
+                          add_features: bool = True, random_state: int = 42) -> Dict[str, Any]:
     """
     Tune hyperparameters with a bounded randomized search.
 
@@ -185,14 +173,13 @@ def hyperparameter_tuning(X_train: pd.DataFrame, y_train: pd.Series,
         cv_folds: Number of CV folds
         add_features: Whether to add domain features
         random_state: Random seed
-        time_ordered: Validate each fold on later rows than it trains on
 
     Returns:
         Dictionary containing best model, parameters and CV score
     """
     model = build_model(model_type, numeric_cols, categorical_cols,
                         imbalance_strategy, add_features, random_state)
-    cv = make_cv(cv_folds, time_ordered, random_state)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
     search = RandomizedSearchCV(model, PARAM_DISTRIBUTIONS[model_type], n_iter=n_iter,
                                 scoring=scoring, cv=cv, n_jobs=-1, random_state=random_state)
     # Log the search size up front, since tuning is the slowest step
