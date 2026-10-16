@@ -14,6 +14,10 @@ AWS as LabRole instead. Run inside the aws-tools container:
     pull-model       download the champion for the local API
     smoke-test       deploy the champion to a serverless endpoint, score one record, delete it
     schedule         run the pipeline once at a time, yearly, or turn the schedule off
+    endpoint         --up: champion on a real-time endpoint with monitoring and a dashboard
+                     (bills hourly); --down: remove all of it
+    batch-score      score a CSV of customers with the champion (Batch Transform)
+    train-sklearn    main's cloud training: one random forest in AWS's scikit-learn container
 """
 
 import argparse
@@ -27,7 +31,11 @@ import pandas as pd
 from botocore.exceptions import ClientError
 from sagemaker.workflow.pipeline_context import PipelineSession
 
+from src.aws.batch import batch_score
 from src.aws.config import MODEL_GROUP, PIPELINE_NAME, AwsConfig, session
+from src.aws.endpoint import endpoint_down, endpoint_up
+from src.aws.feature_store import ensure_feature_group
+from src.aws.sklearn_training import train_sklearn
 from src.aws.pipeline import build_pipeline
 from src.aws.registry import latest_packages, model_data_url
 from src.utils.logging_config import setup_logging
@@ -99,6 +107,7 @@ def deploy_pipeline(cfg: AwsConfig, aws, image_tag: str, start: bool, quick: boo
     except ClientError as exc:
         if 'already exists' not in str(exc):
             raise
+    ensure_feature_group(cfg, sagemaker)
     pipeline = build_pipeline(cfg, image_tag, PipelineSession(boto_session=aws))
     pipeline.upsert(role_arn=cfg.role_arn)
     print(f"Pipeline {PIPELINE_NAME} now runs image {cfg.image_uri(image_tag)}")
@@ -193,6 +202,15 @@ def schedule(cfg: AwsConfig, aws, once: str, yearly: str, off: bool) -> None:
     print(f"Schedule {SCHEDULE_NAME}: {expression} UTC")
 
 
+def batch(cfg: AwsConfig, aws, source: str, destination: str) -> None:
+    """Score customers from a file and save them ranked, highest probability first."""
+    customers = pd.read_parquet(source) if source.endswith('.parquet') else pd.read_csv(source, sep=SEPARATOR)
+    customers = customers.drop(columns=['y', 'duration'], errors='ignore')
+    scored = batch_score(cfg, aws, customers).sort_values('probability', ascending=False)
+    scored.to_csv(destination, index=False)
+    print(f"Scored {len(scored)} customers; ranked list saved to {destination}")
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog='aws-tools', description=__doc__.split('\n\n')[0])
@@ -207,7 +225,8 @@ def main() -> None:
     deploy_args = commands.add_parser('deploy-pipeline')
     deploy_args.add_argument('--image-tag', required=True, help='image tag in ECR (scripts/deploy.sh uses the commit)')
     deploy_args.add_argument('--start', action='store_true')
-    deploy_args.add_argument('--quick', action='store_true', help='with --start: random forest only, short search')
+    deploy_args.add_argument('--quick', action='store_true',
+                             help='with --start: logistic regression only, short search')
     commands.add_parser('approve')
     commands.add_parser('rollback')
     pull_args = commands.add_parser('pull-model')
@@ -217,6 +236,16 @@ def main() -> None:
     schedule_args.add_argument('--once', metavar='YYYY-MM-DDTHH:MM:SS', help='one run at this UTC time')
     schedule_args.add_argument('--yearly', metavar='MM-DD', help='every year on this day at 06:00 UTC')
     schedule_args.add_argument('--off', action='store_true')
+    endpoint_args = commands.add_parser('endpoint')
+    endpoint_state = endpoint_args.add_mutually_exclusive_group(required=True)
+    endpoint_state.add_argument('--up', action='store_true')
+    endpoint_state.add_argument('--down', action='store_true')
+    endpoint_args.add_argument('--instance-type', default='ml.t2.medium', help='about $1.10 per day while up')
+    batch_args = commands.add_parser('batch-score')
+    batch_args.add_argument('--input', default='data/processed/test.parquet', help='CSV (;-separated) or Parquet')
+    batch_args.add_argument('--output', default='batch_scores.csv')
+    sklearn_args = commands.add_parser('train-sklearn')
+    sklearn_args.add_argument('--instance-type', default='ml.m5.large')
     args = parser.parse_args()
 
     aws = session()
@@ -235,6 +264,15 @@ def main() -> None:
         pull_model(aws, args.dest)
     elif args.command == 'smoke-test':
         smoke_test(cfg, aws)
+    elif args.command == 'endpoint':
+        if args.up:
+            endpoint_up(cfg, aws, args.instance_type)
+        else:
+            endpoint_down(aws)
+    elif args.command == 'batch-score':
+        batch(cfg, aws, args.input, args.output)
+    elif args.command == 'train-sklearn':
+        print(f"Model saved to {train_sklearn(cfg, aws, args.instance_type)}")
     else:
         schedule(cfg, aws, args.once, args.yearly, args.off)
 

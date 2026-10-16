@@ -417,8 +417,9 @@ lab runbook are in [docs/aws.md](docs/aws.md).
 
 - **Pipeline** (`src/aws/pipeline.py`): prepare data, skip if there is too little new data, train a challenger, compare it with the champion on data neither has seen, then register it pending approval or reject it with reasons.
 - **Serving** (`src/serving/app.py`): one FastAPI app answers SageMaker (`/ping`, `/invocations`) and local clients (`/predict`); every prediction returns the model's run, commit and threshold.
-- **Operations** (`aws-tools`, run in Docker with the lab keys in `.env`): `check`, `replay`, `deploy-pipeline`, `approve`, `rollback`, `pull-model`, `smoke-test`, `schedule`.
-- **CI** (`.github/workflows/ci-cd.yml`): lint, tests and an image build on every push; GitHub holds no AWS keys.
+- **Operations** (`aws-tools`, run in Docker with the lab keys in `.env`): `check`, `replay`, `deploy-pipeline`, `approve`, `rollback`, `pull-model`, `smoke-test`, `schedule`, `endpoint --up/--down` (real-time endpoint with Model Monitor and a CloudWatch dashboard), `batch-score` (Batch Transform) and `train-sklearn` (main's scikit-learn container training). PrepareData also writes each new batch to a Feature Store group.
+- **CI** (`.github/workflows/ci-cd.yml`): lint, tests and an image build on every push.
+- **CD** (`.github/workflows/deploy.yml`): a manual "Deploy to AWS" button on `main` that runs `scripts/deploy.sh` or rolls back the champion, using lab keys from repository secrets.
 
 ```bash
 scripts/deploy.sh

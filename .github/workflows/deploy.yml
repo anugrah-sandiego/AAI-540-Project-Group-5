@@ -1,0 +1,43 @@
+name: Deploy to AWS
+
+# Manual "Run workflow" button (Actions tab) on main: deploy this commit to AWS, or
+# roll back the champion. AWS Academy keys expire every few hours, so before each
+# run update the repository secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
+# AWS_SESSION_TOKEN with fresh lab keys. In a real account, use GitHub OIDC with
+# aws-actions/configure-aws-credentials instead of stored keys.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: deploy (push image, start the pipeline) or rollback (previous champion)
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+
+permissions:
+  contents: read
+
+jobs:
+  aws:
+    name: ${{ inputs.action }}
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # scripts/deploy.sh and aws-tools read the keys from .env (git- and docker-ignored);
+      # the file exists only on this runner for the length of the job
+      - name: Write the lab keys for this run
+        env:
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          printf 'AWS_ACCESS_KEY_ID=%s\nAWS_SECRET_ACCESS_KEY=%s\nAWS_SESSION_TOKEN=%s\nAWS_REGION=us-east-1\n' \
+            "$KEY_ID" "$SECRET" "$TOKEN" > .env
+      - name: Deploy this commit
+        if: inputs.action == 'deploy'
+        run: scripts/deploy.sh
+      - name: Roll back the champion
+        if: inputs.action == 'rollback'
+        run: docker compose run --rm -T aws-tools rollback

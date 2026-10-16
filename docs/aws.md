@@ -17,6 +17,11 @@ aws-tools schedule     ------------>  EventBridge Scheduler  ->  pipeline run:
 aws-tools approve / rollback  ----->  Model Registry "bank-marketing-models"
 aws-tools pull-model  <------------  champion model.tar.gz  ->  docker compose up api
 aws-tools smoke-test  ------------>  serverless endpoint (created, called, deleted)
+aws-tools endpoint --up/--down --->  real-time endpoint + data capture + Model Monitor + CloudWatch dashboard
+aws-tools batch-score  ----------->  Batch Transform job with the champion
+aws-tools train-sklearn  --------->  main's training: one random forest in AWS's scikit-learn container
+PrepareData (each run)  ---------->  Feature Store "bank-marketing-batches" (new batches, offline store)
+GitHub Actions "Deploy to AWS"  -->  scripts/deploy.sh or rollback, run on demand
 ```
 
 ## Code
@@ -30,6 +35,11 @@ aws-tools smoke-test  ------------>  serverless endpoint (created, called, delet
 | `src/serving/app.py` | SageMaker endpoint (`serve`), local `api` | `/ping`, `/invocations`, `/predict` |
 | `src/aws/cli.py` | aws-tools | The commands below |
 | `src/aws/registry.py` | both | Champion lookup |
+| `src/aws/feature_store.py` | aws-tools, SageMaker Processing | Feature group creation (adapted from main) and batch writes |
+| `src/aws/endpoint.py`, `monitor_preprocessor.py` | aws-tools | Real-time endpoint, data capture, Model Monitor, dashboard (adapted from main) |
+| `src/aws/batch.py` | aws-tools | Batch Transform scoring (adapted from main) |
+| `src/aws/sklearn_training.py`, `sklearn/train.py` | aws-tools, SageMaker Training | main's scikit-learn container training (script unchanged from main) |
+| `.github/workflows/deploy.yml` | GitHub Actions | Manual deploy or rollback with lab keys from repository secrets |
 
 ## S3 layout (`s3://sagemaker-<region>-<account>/aai540/bank-marketing/`)
 
@@ -40,6 +50,10 @@ aws-tools smoke-test  ------------>  serverless endpoint (created, called, delet
 | `quarantine/<batch>/` | Batches that failed validation, with `reason.txt` |
 | `runs/<execution id>/{train,eval,report,evaluation}/` | Per-run dataset version and decision |
 | `models/` | Training job outputs (`model.tar.gz`, MLflow run) |
+| `feature-store/` | Offline store of the feature group: every new batch with its arrival time |
+| `monitoring/capture/`, `monitoring/baseline/`, `monitoring/reports/` | Captured endpoint traffic, training baseline, hourly data-quality reports |
+| `batch/<job>/` | Batch Transform input and output |
+| `processed/`, `sklearn-models/` | Splits uploaded by `train-sklearn` and its model output |
 
 ## How a run decides
 
@@ -74,7 +88,19 @@ docker compose run --rm aws-tools schedule --yearly 10-20                # every
 docker compose run --rm aws-tools schedule --off                         # remove the schedule
 docker compose run --rm aws-tools pull-model && docker compose up api
 docker compose run --rm aws-tools rollback                   # if the champion misbehaves
+docker compose run --rm aws-tools batch-score                # rank the test split with the champion -> batch_scores.csv
+docker compose run --rm aws-tools endpoint --up              # live endpoint + monitoring + dashboard (bills hourly)
+docker compose run --rm aws-tools endpoint --down            # ALWAYS run when finished
+docker compose run --rm aws-tools train-sklearn              # main's scikit-learn container training
 ```
+
+**Cost:** pipeline runs, batch scoring and `train-sklearn` cost cents and leave nothing
+running. `endpoint --up` runs an `ml.t2.medium` instance (about $1.10 per day) plus an
+hourly monitoring job (about $0.12 per run) until `endpoint --down`.
+
+**GitHub "Deploy to AWS" button** (Actions tab, `main` only): set the repository secrets
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` to fresh lab keys,
+then run the workflow with `deploy` (scripts/deploy.sh) or `rollback`.
 
 End the lab and empty `.env` when done. Cost per run is a few cents (ml.m5.large
 jobs for minutes); nothing is left running.
@@ -84,4 +110,4 @@ jobs for minutes); nothing is left running.
 - Keys expire about every 4 hours; only aws-tools uses them. Scheduled runs use `LabRole`.
 - If `check` reports that the scheduler cannot use `LabRole`, start runs with `deploy-pipeline --start` instead.
 - The lab account closes at the end of the course, so schedules stop then.
-- GitHub Actions has no AWS access; CI tests and builds, and `scripts/deploy.sh` pushes the image and starts the pipeline.
+- CI (ci-cd.yml) has no AWS access. The manual Deploy workflow uses lab keys stored as repository secrets, which expire with the lab session; a real account would use GitHub OIDC instead.
