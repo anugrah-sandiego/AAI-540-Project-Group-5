@@ -459,7 +459,6 @@ docker compose up ui              # starts the API too; open http://localhost:85
 
 | Tab | Shows |
 |---|---|
-| Predict a customer | Probability, call / don't call at the model cut-off, and where the customer would rank among test customers |
 | Who to call | Test customers ranked by the API; a "call the top X%" slider with subscribers reached vs random calling; CSV download |
 | Test data analytics | Subscriber rate by contact month and by segment (previous outcome, housing loan, contact type, age band, job); share of unknown values |
 | Model performance | ROC-AUC, lift and gains by tenth of the ranked list (computed live from the API's scores), metrics recorded at training, model lineage |

@@ -15,8 +15,7 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from src.ui.analysis import (age_band, call_top, gains_by_decile, position_among, rank, roc_auc,
-                             segment_rates, time_periods)
+from src.ui.analysis import age_band, call_top, gains_by_decile, rank, roc_auc, segment_rates, time_periods
 
 API_URL = os.getenv('API_URL', 'http://localhost:8080')
 TEST_DATA = Path(os.getenv('TEST_DATA', 'data/processed/test.parquet'))
@@ -71,30 +70,7 @@ st.caption(f"Model: {model['model_type']} · trained {model['trained_at'][:16]} 
            f"cut-off {model['decision_threshold']:.3f} · all figures use the held-out test split "
            f"({len(test):,} newest customers, never used for training)")
 
-predict_tab, call_tab, data_tab, model_tab = st.tabs(
-    ['Predict a customer', 'Who to call', 'Test data analytics', 'Model performance'])
-
-with predict_tab:
-    st.subheader('Should we call this customer?')
-    with st.form('customer'):
-        columns = st.columns(3)
-        customer = {}
-        for i, name in enumerate(NUMERIC):
-            customer[name] = columns[i % 3].number_input(name, value=int(test[name].median()), step=1)
-        for i, name in enumerate(CATEGORICAL):
-            options = sorted(test[name].unique())
-            customer[name] = columns[i % 3].selectbox(name, options, index=options.index(test[name].mode()[0]))
-        submitted = st.form_submit_button('Predict')
-    if submitted:
-        try:
-            result = predict([customer])[0]
-        except httpx.HTTPError as exc:
-            st.error(f'Prediction failed: {exc}')
-        else:
-            left, middle, right = st.columns(3)
-            left.metric('Probability of subscribing', f"{result['probability']:.1%}")
-            middle.metric('Decision at the model cut-off', 'Call' if result['subscribe'] else "Don't call")
-            right.metric('Rank among test customers', f"top {position_among(result['probability'], scored):.0f}%")
+call_tab, data_tab, model_tab = st.tabs(['Who to call', 'Test data analytics', 'Model performance'])
 
 with call_tab:
     st.subheader('If we can only call some customers, who and what do we gain?')

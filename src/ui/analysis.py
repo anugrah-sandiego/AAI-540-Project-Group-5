@@ -53,11 +53,6 @@ def gains_by_decile(scored: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
-def position_among(probability: float, scored: pd.DataFrame) -> float:
-    """Where a score would land in the test ranking, as 'top x%' (smaller is better)."""
-    return float((scored['probability'] >= probability).mean() * 100)
-
-
 def time_periods(month: pd.Series) -> pd.Series:
     """Label each contact month in file order (rows are in date order; the data has no year column)."""
     period = (month != month.shift()).cumsum()

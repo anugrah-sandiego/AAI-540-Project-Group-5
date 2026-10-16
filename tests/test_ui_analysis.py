@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 from sklearn.metrics import roc_auc_score
 
-from src.ui.analysis import age_band, call_top, gains_by_decile, position_among, roc_auc, segment_rates, time_periods
+from src.ui.analysis import age_band, call_top, gains_by_decile, roc_auc, segment_rates, time_periods
 
 
 def scored_customers(n=100, seed=0):
@@ -36,12 +36,6 @@ def test_gains_cover_every_customer_and_end_with_all_subscribers():
     assert list(gains.index) == list(range(1, 11)) and gains['customers'].sum() == 100
     assert gains['cumulative_share_of_subscribers'].iloc[-1] == pytest.approx(1.0)
     assert gains['lift'].iloc[0] >= gains['lift'].iloc[-1]
-
-
-def test_position_among_test_customers():
-    scored = pd.DataFrame({'y': [0] * 4, 'probability': [0.9, 0.5, 0.3, 0.1]})
-    assert position_among(0.6, scored) == 25.0
-    assert position_among(0.05, scored) == 100.0
 
 
 def test_time_periods_keep_repeated_months_apart():
