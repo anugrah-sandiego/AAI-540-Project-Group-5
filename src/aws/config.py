@@ -14,6 +14,11 @@ PREFIX = 'aai540/bank-marketing'
 PIPELINE_NAME = 'bank-marketing-retrain'
 MODEL_GROUP = 'bank-marketing-models'
 ECR_REPOSITORY = 'aai540-bank-marketing'
+FEATURE_GROUP = 'bank-marketing-batches'
+# Real-time endpoint for the champion, with its monitoring schedule and dashboard
+ENDPOINT_NAME = 'bank-marketing-live'
+MONITOR_SCHEDULE = 'bank-marketing-data-quality'
+DASHBOARD_NAME = 'bank-marketing'
 
 
 @dataclass(frozen=True)

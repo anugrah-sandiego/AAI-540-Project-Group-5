@@ -56,6 +56,7 @@ def build_pipeline(config: AwsConfig, image_tag: str, session: PipelineSession) 
                                 destination=config.s3('checkpoints')),
                ProcessingOutput(output_name='quarantine', source=f'{PROCESSING}/quarantine',
                                 destination=config.s3('quarantine'))],
+            arguments=['--region', config.region],
         ),
         property_files=[report],
     )

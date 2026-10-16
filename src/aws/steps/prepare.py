@@ -6,16 +6,23 @@ accepted raw batch, so re-running never double-counts rows. Batches already in
 the checkpoint become training data; batches new in this run become evaluation
 data, which neither the current champion nor the new challenger has trained on.
 Batches that fail validation are quarantined once and skipped afterwards.
+With --region, each new batch is also written to the Feature Store
+(src/aws/feature_store.py) with the time it was accepted.
 """
 
+import argparse
 import json
 import logging
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Tuple
 
+import boto3
 import pandas as pd
+from botocore.exceptions import BotoCoreError, ClientError
 
+from src.aws.feature_store import put_batch
 from src.data_ingestion.data_ingestion import load_data, validate_schema
 from src.utils.lineage import file_sha256
 from src.utils.logging_config import setup_logging
@@ -79,11 +86,31 @@ def prepare(raw_dir: Path, checkpoint: Dict[str, dict]) -> Tuple[pd.DataFrame, p
     return train, evaluation, report, status
 
 
+def write_feature_store(region: str, new_batches: list) -> dict:
+    """Write new batches to the Feature Store; a failure is reported, not fatal to training."""
+    runtime = boto3.client('sagemaker-featurestore-runtime', region_name=region)
+    event_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    try:
+        written = {batch_id: put_batch(runtime, load_data(BASE / 'raw' / batch_id / BATCH_FILE, sep=SEPARATOR),
+                                       batch_id, event_time)
+                   for batch_id in new_batches}
+    except (BotoCoreError, ClientError) as exc:
+        logger.error("Feature Store write failed: %s", exc)
+        return {'error': str(exc)}
+    logger.info("Feature Store: wrote %s", written)
+    return {'written': written, 'event_time': event_time}
+
+
 def main() -> None:
     setup_logging()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--region', help='write new batches to the Feature Store in this region')
+    args = parser.parse_args()
     checkpoint_file = BASE / 'checkpoint-in' / 'processed_batches.json'
     checkpoint = json.loads(checkpoint_file.read_text()) if checkpoint_file.exists() else {}
     train, evaluation, report, status = prepare(BASE / 'raw', checkpoint)
+    if args.region:
+        report['feature_store'] = write_feature_store(args.region, report['new_batches'])
 
     for name, frame in (('train', train), ('eval', evaluation)):
         (BASE / name).mkdir(parents=True, exist_ok=True)
