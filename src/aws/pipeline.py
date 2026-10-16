@@ -34,7 +34,7 @@ def build_pipeline(config: AwsConfig, image_tag: str, session: PipelineSession) 
     """Define the pipeline for the image pushed with the given tag."""
     image_uri = config.image_uri(image_tag)
     instance_type = ParameterString('InstanceType', default_value='ml.m5.large')
-    min_new_rows = ParameterInteger('MinNewRows', default_value=300)
+    min_new_rows = ParameterInteger('MinNewRows', default_value=1000)
     quick = ParameterString('QuickTraining', default_value='false')
     run_dir = Join(on='/', values=[config.s3('runs'), ExecutionVariables.PIPELINE_EXECUTION_ID])
 

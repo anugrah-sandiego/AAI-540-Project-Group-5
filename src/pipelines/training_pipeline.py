@@ -15,6 +15,7 @@ import joblib
 import mlflow
 import mlflow.data
 import mlflow.sklearn
+import pandas as pd
 from mlflow.models import infer_signature
 from pathlib import Path
 from src.data_ingestion.data_ingestion import (load_data, validate_schema, split_data,
@@ -166,6 +167,15 @@ class TrainingPipeline:
             failed_gates = {k: test_metrics[k] for k, v in gates.items() if test_metrics[k] < v}
             mlflow.set_tag('quality_gates_passed', str(not failed_gates))
 
+            # Optionally refit the chosen model on every row, so it also learns from the
+            # newest data. Used on SageMaker, where new batches are the out-of-time test;
+            # the metrics above remain those of the held-out split
+            refit = train_cfg.get('refit_on_all_data', False)
+            mlflow.log_param('refit_on_all_data', refit)
+            if refit:
+                with log_stage(logger, 'refit on all rows'):
+                    model.fit(pd.concat([X_train, X_val, X_test]), pd.concat([y_train, y_val, y_test]))
+
             with log_stage(logger, 'log model to MLflow'):
                 mlflow.sklearn.log_model(
                     model, name='model', serialization_format='cloudpickle',
@@ -190,6 +200,7 @@ class TrainingPipeline:
                 # Which split produced test_metrics: 'time' scores are out-of-time
                 'split_strategy': split_strategy,
                 'test_metrics': test_metrics,
+                'refit_on_all_data': refit,
                 # Trace the saved model back to its code, data and environment
                 'trained_at': lineage['collected_at'],
                 'lineage': lineage,

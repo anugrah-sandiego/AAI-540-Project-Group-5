@@ -28,7 +28,7 @@ def write_inputs(tmp_path, allow_dirty):
         'feature_engineering': {'add_domain_features': True},
         'training': {'cv_folds': 2, 'selection_metric': 'average_precision',
                      'candidate_models': ['logistic_regression'], 'imbalance_strategies': ['none'],
-                     'tuning_iterations': 1, 'threshold_metric': 'f1',
+                     'tuning_iterations': 1, 'threshold_metric': 'f1', 'refit_on_all_data': True,
                      'quality_gates': {}},  # random synthetic data: no gates
         'evaluation': {'lift_percentiles': [10]},
         'model': {'output_dir': 'models'},
@@ -74,6 +74,12 @@ def test_pipeline_saves_model_and_metrics(pipeline_run):
     assert (tmp_path / 'models' / 'model.joblib').exists()
     assert {'train', 'val', 'test'} == {p.stem for p in (tmp_path / 'processed').glob('*.parquet')}
     assert 0 <= pipeline_run['metadata']['test_metrics']['roc_auc'] <= 1
+
+
+def test_refit_trains_the_saved_model_on_every_row(pipeline_run):
+    scaler = pipeline_run['result']['model'].named_steps['preprocess'].named_transformers_['num']
+    assert pipeline_run['metadata']['refit_on_all_data'] is True
+    assert scaler.n_samples_seen_ == 400  # train + validation + test
 
 
 def test_metadata_contains_lineage(pipeline_run):

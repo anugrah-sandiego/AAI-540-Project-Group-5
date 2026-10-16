@@ -86,7 +86,8 @@ def test_training_config_targets_sagemaker_directories(tmp_path):
 
 def test_training_leaves_the_quality_gates_to_the_evaluate_step(tmp_path):
     base = load_config('config.yaml')
-    assert training_config(base, quick=False, ml_root=tmp_path)['training']['quality_gates'] == {}
+    sagemaker = training_config(base, quick=False, ml_root=tmp_path)['training']
+    assert sagemaker['quality_gates'] == {} and sagemaker['refit_on_all_data'] is True
     # The evaluate step still reads the gates from the unchanged config
     assert base['training']['quality_gates']
 

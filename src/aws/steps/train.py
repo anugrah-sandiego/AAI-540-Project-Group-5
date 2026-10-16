@@ -39,6 +39,8 @@ def training_config(base: dict, quick: bool, ml_root: Path = ML_ROOT) -> dict:
     # EvaluateChallenger applies the quality gates, so a weak model ends the run as
     # RejectChallenger with its reasons instead of failing inside training
     config['training']['quality_gates'] = {}
+    # New batches are the out-of-time test, so the saved model learns from all history
+    config['training']['refit_on_all_data'] = True
     if quick:
         config['training'].update(QUICK_TRAINING)
     return config

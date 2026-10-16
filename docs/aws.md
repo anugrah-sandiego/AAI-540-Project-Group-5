@@ -44,8 +44,8 @@ aws-tools smoke-test  ------------>  serverless endpoint (created, called, delet
 ## How a run decides
 
 1. **PrepareData** rebuilds the dataset from all accepted batches (idempotent). Batches seen before are training data; batches new in this run are evaluation data.
-2. **EnoughNewData**: skips training when the new batches have fewer than `MinNewRows` (300) rows.
-3. **TrainChallenger** runs the training pipeline. It trains the candidates in `config.yaml` (logistic regression) with a time-ordered split; `QuickTraining=true` (`scripts/deploy.sh --quick`) uses a shorter search for cheaper test runs. Training does not apply the quality gates itself, so a weak model reaches EvaluateChallenger and is rejected with reasons.
+2. **EnoughNewData**: skips training when the new batches have fewer than `MinNewRows` (1,000) rows: enough new customers for a stable evaluation (with 350 rows, ROC-AUC could vary by about ±0.06).
+3. **TrainChallenger** runs the training pipeline. It trains the candidates in `config.yaml` (logistic regression) with a time-ordered split; `QuickTraining=true` (`scripts/deploy.sh --quick`) uses a shorter search for cheaper test runs. Training does not apply the quality gates itself, so a weak model reaches EvaluateChallenger and is rejected with reasons. After choosing the settings and cut-off on its internal time split, it refits on all the history, so the model also learns from the newest data before it is judged on the new batches.
 4. **EvaluateChallenger** scores the challenger and the champion on the new data neither has seen. It passes when the quality gates in `config.yaml` hold, PR-AUC is no more than 0.01 below the champion's, and recall in every age band is at least 80% of overall recall.
 5. **GatesPassed** registers the challenger as *pending approval*, or fails the run with the reasons in `evaluation.json`.
 
@@ -63,12 +63,12 @@ AWS_REGION=us-east-1
 
 ```bash
 docker compose run --rm aws-tools check                      # identity; can the scheduler use LabRole?
-docker compose run --rm aws-tools replay --batches 2         # history + one day
+docker compose run --rm aws-tools replay --batches 4         # history + 3 batches (1,050 new rows)
 scripts/deploy.sh                                            # push this commit's image, update and start the pipeline
 # watch the run in SageMaker Studio > Pipelines (about 15-25 minutes)
 docker compose run --rm aws-tools approve                    # newest pending -> champion
 docker compose run --rm aws-tools smoke-test                 # serverless endpoint, deleted afterwards
-docker compose run --rm aws-tools replay                     # next day
+docker compose run --rm aws-tools replay --batches 3         # next 1,050 rows before the next run
 docker compose run --rm aws-tools schedule --once 2026-10-16T10:00:00   # one run
 docker compose run --rm aws-tools schedule --yearly 10-20                # every 20 Oct, 06:00 UTC
 docker compose run --rm aws-tools schedule --off                         # remove the schedule

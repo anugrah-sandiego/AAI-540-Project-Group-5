@@ -39,6 +39,10 @@ training:
   tuning_iterations: 10
   # Decision threshold is chosen on the validation set to maximise this metric
   threshold_metric: f1
+  # Refit the chosen model on all rows before saving. Off locally, so the saved
+  # model matches its reported test score; on for SageMaker (src/aws/steps/train.py),
+  # where new batches are the out-of-time test
+  refit_on_all_data: false
   # Minimum test-set quality gates; the pipeline fails if these are not met.
   # Proposed from the time-split baseline (logistic regression: ROC-AUC 0.675,
   # lift@10 1.77), pending team agreement. The previous 0.75 / 2.5 came from the
