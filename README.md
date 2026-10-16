@@ -81,7 +81,7 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 │  - Load semicolon-separated CSV / Excel / Parquet             │
 │  - Schema & data-quality validation (columns, types, nulls,  │
 │    target values, duplicates, 'unknown' rates)               │
-│  - Time-ordered 70 / 15 / 15 train/val/test split            │
+│  - Stratified, shuffled 70 / 15 / 15 train/val/test split    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -95,10 +95,10 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                    Model Training Layer                       │
-│  - Logistic Regression (configured); Decision Tree, Random   │
-│    Forest, Gradient Boosting available in config.yaml        │
+│  - Logistic Regression, Decision Tree, Random Forest,        │
+│    Gradient Boosting (HistGradientBoosting)                  │
 │  - Class-imbalance strategies: none / class_weight / SMOTE   │
-│  - Time-ordered 5-fold CV, selection by PR-AUC               │
+│  - Shuffled stratified 5-fold CV, selection by PR-AUC        │
 │  - Bounded RandomizedSearchCV on the best candidate          │
 └─────────────────────────────────────────────────────────────┘
                               ↓
@@ -154,7 +154,7 @@ The project uses the **UCI Bank Marketing Dataset**, a publicly available datase
 ### Data Characteristics
 
 - **Class Imbalance:** The dataset is imbalanced with approximately 11.7% positive class (subscribers)
-- **Chronological Ordering:** Rows are ordered by contact date (May 2008 – Nov 2010) and the positive rate rises from ~3% in the first fifth of the file to ~32% in the last fifth. Splits and CV folds therefore follow time order (oldest rows train, newest test), so scores reflect predicting future customers; this is also a real drift signal to monitor in production.
+- **Chronological Ordering:** Rows are ordered by contact date (May 2008 – Nov 2010) and the positive rate rises from ~3% in the first fifth of the file to ~32% in the last fifth. Splits and CV folds must be shuffled; this is also a real drift signal to monitor in production.
 - **Missing Values:** No nulls, but some categoricals contain "unknown" (poutcome 82%, contact 29%, education 4%, job <1%), which is kept as its own category
 - **Leakage:** `duration` is only known after the call, so it is excluded from the pre-contact model
 - **Data Types:** Mix of numerical and categorical features
@@ -263,7 +263,7 @@ AAI-540-Project-Group-5/
 **Functions:**
 - `load_data(file_path, sep=',')`: Loads CSV, Excel or Parquet files
 - `validate_schema(df)`: Checks expected columns, numeric types, nulls, target values; returns a data-quality report
-- `split_data(X, y, val_size, test_size, random_state, strategy)`: Time-ordered (`'time'`) or shuffled stratified (`'random'`) train/val/test split
+- `split_data(X, y, val_size, test_size, random_state)`: Stratified, shuffled train/val/test split
 
 ```python
 from src.data_ingestion.data_ingestion import load_data, validate_schema, split_data
@@ -318,37 +318,15 @@ python -m src.pipelines.training_pipeline
 1. Load configuration from `config.yaml`
 2. Load and validate data, log the data-quality report
 3. Drop excluded (leaky) features and encode the target
-4. Time-ordered 70/15/15 split (oldest rows train, newest test); save splits to `data/processed/*.parquet`
-5. Cross-validate the candidates in `config.yaml` (logistic regression, with and without class weights) on time-ordered folds
+4. Stratified 70/15/15 split; save splits to `data/processed/*.parquet`
+5. Cross-validate 4 models × 3 imbalance strategies on the training split
 6. Tune the best candidate (by CV PR-AUC)
 7. Choose the decision threshold on the validation split
 8. Evaluate once on the test split (technical + business metrics)
 9. Check quality gates; fail the run if they are not met
 10. Log everything to MLflow and save `models/model.joblib` and `models/model_metadata.json`
 
-### Results (time-ordered split: newest 6,782 customers, `duration` excluded)
-
-The data is in date order and the subscriber rate rises from about 5% (2008) to 52% (2010). The model is therefore trained on the oldest 70% and tested on the newest 15%, which is how it is used: learn from past campaigns, rank future customers.
-
-Selected model: logistic regression without class weights (`C = 0.002`), decision threshold 0.074 chosen on validation. The threshold is low because the training years had few subscribers; the ranking still holds.
-
-| Metric | Value |
-|---|---|
-| ROC-AUC | 0.675 |
-| PR-AUC | 0.582 |
-| Precision / recall / F1 at the tuned threshold | 0.547 / 0.599 / 0.572 |
-
-| Targeted segment | Conversion | Lift vs. random outreach (39.3% in this period) |
-|---|---|---|
-| Top 10% | 69.7% | 1.77× (best possible: 2.54×) |
-| Top 20% | 68.5% | 1.74× |
-| Top 30% | 60.3% | 1.53× |
-
-Logistic regression was chosen because, under the time split, it ranked newer customers best: the earlier search over 4 models × 3 imbalance strategies picked gradient boosting with SMOTE, which scored ROC-AUC 0.554 on the same test.
-
-### Original benchmark (shuffled split)
-
-With `split_strategy: random`, rows are shuffled before splitting, so training and test mix all years. This overstates performance on future customers: a score that only knows the time period, with no customer information, already reaches ROC-AUC 0.76. The results below are kept for comparison.
+### Results (test split, 6,782 customers, `duration` excluded)
 
 Cross-validation on the training split (mean of 5 shuffled folds, default 0.5 threshold for F1):
 
@@ -393,7 +371,7 @@ ROC-AUC 0.793, PR-AUC 0.440.
 
 ### Quality Gates
 
-Configured in `config.yaml` under `training.quality_gates` (currently ROC-AUC ≥ 0.60 and lift@10 ≥ 1.1, proposed from the time-split baseline and pending team agreement; the earlier 0.75 / 2.5 came from the shuffled split). The pipeline raises an error and tags the MLflow run `quality_gates_passed=False` if the test metrics fall below them.
+Configured in `config.yaml` under `training.quality_gates` (currently ROC-AUC ≥ 0.75 and lift@10 ≥ 2.5). The pipeline raises an error and tags the MLflow run `quality_gates_passed=False` if the test metrics fall below them.
 
 ---
 
@@ -524,7 +502,6 @@ The main configuration file controls the data split, excluded features, candidat
 data:
   raw_path: data/raw/bank-full.csv
   separator: ";"
-  split_strategy: time        # or random (shuffled; optimistic)
   val_size: 0.15
   test_size: 0.15
   excluded_features: [duration]
@@ -532,13 +509,13 @@ data:
 training:
   cv_folds: 5
   selection_metric: average_precision
-  candidate_models: [logistic_regression]   # also: decision_tree, random_forest, gradient_boosting
-  imbalance_strategies: [none, class_weight] # also: smote
-  tuning_iterations: 10
+  candidate_models: [logistic_regression, decision_tree, random_forest, gradient_boosting]
+  imbalance_strategies: [none, class_weight, smote]
+  tuning_iterations: 20
   threshold_metric: f1
   quality_gates:
-    roc_auc: 0.60
-    lift_at_10: 1.1
+    roc_auc: 0.75
+    lift_at_10: 2.5
 
 mlflow:
   experiment_name: term_deposit_prediction
@@ -583,9 +560,9 @@ python -m src.pipelines.training_pipeline
 
 **Issue:** F1 score around 0.1 when cross-validating on the full file
 
-**Cause:** `bank-full.csv` is sorted by date, so time-ordered folds train on one period and test on another with a very different positive rate.
+**Cause:** `bank-full.csv` is sorted by date, and unshuffled CV folds train on one period and test on another with a very different positive rate.
 
-**Solution:** Tune the decision threshold on validation data (done by the pipeline). Do not fix it by shuffling: shuffled folds raise the scores by mixing periods, which overstates performance on future customers.
+**Solution:** Use shuffled `StratifiedKFold` (already done in `compare_models` / `hyperparameter_tuning`) and tune the decision threshold on validation data.
 
 #### Issue 4: Data Loading Error
 
