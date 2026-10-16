@@ -15,13 +15,18 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, rank, roc_auc,
-                             segment_rates, time_periods)
+from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, position_among,
+                             rank, roc_auc, segment_rates, time_periods)
 
 API_URL = os.getenv('API_URL', 'http://localhost:8080')
 TEST_DATA = Path(os.getenv('TEST_DATA', 'data/processed/test.parquet'))
 NUMERIC = ['age', 'balance', 'day', 'campaign', 'pdays', 'previous']
 CATEGORICAL = ['job', 'marital', 'education', 'default', 'housing', 'loan', 'contact', 'month', 'poutcome']
+# Inputs a user gives for a potential customer; the model's call-timing inputs
+# (day, month, contact, campaign) are filled with typical test values instead
+CUSTOMER_DETAILS = {'age': 'number', 'balance': 'number', 'job': 'choice', 'marital': 'choice',
+                    'education': 'choice', 'default': 'choice', 'housing': 'choice', 'loan': 'choice'}
+HISTORY = {'pdays': 'number', 'previous': 'number', 'poutcome': 'choice'}
 
 
 @st.cache_data
@@ -94,6 +99,38 @@ with call_tab:
                      'probability', format='percent', min_value=0.0, max_value=1.0)})
     st.download_button('Download the call list (CSV)', call_list.to_csv(index=False),
                        file_name=f'call_list_top_{top_percent}pct.csv', mime='text/csv')
+
+    with st.expander('Check a potential customer: customer details and previous-campaign history'):
+        assumed = {'day': int(test['day'].median()), 'month': test['month'].mode()[0],
+                   'contact': test['contact'].mode()[0], 'campaign': 1}
+        st.caption('The model also needs call-timing inputs; these are filled with typical test values: '
+                   + ', '.join(f'{name} = {value}' for name, value in assumed.items()) + ' (first call).')
+        with st.form('potential_customer'):
+            customer = dict(assumed)
+            for group, fields in (('Customer details', CUSTOMER_DETAILS), ('Previous-campaign history', HISTORY)):
+                st.markdown(f'**{group}**')
+                columns = st.columns(4)
+                for i, (name, kind) in enumerate(fields.items()):
+                    if kind == 'number':
+                        customer[name] = columns[i % 4].number_input(name, value=int(test[name].median()), step=1)
+                    else:
+                        options = sorted(test[name].unique())
+                        customer[name] = columns[i % 4].selectbox(
+                            name, options, index=options.index(test[name].mode()[0]))
+            st.caption('pdays = days since the last contact in a previous campaign (-1 = never contacted)')
+            checked = st.form_submit_button('Check')
+        if checked:
+            try:
+                probability = predict([customer])[0]['probability']
+            except httpx.HTTPError as exc:
+                st.error(f'Prediction failed: {exc}')
+            else:
+                position = position_among(probability, scored)
+                left, middle, right = st.columns(3)
+                left.metric('Probability (use for ranking)', f'{probability:.1%}')
+                middle.metric('Would rank among test customers', f'top {position:.0f}%')
+                decision = 'Call' if position <= top_percent else "Don't call"
+                right.metric(f'Call within the top {top_percent}%?', decision)
 
 with data_tab:
     st.subheader('What do the test-period customers look like?')

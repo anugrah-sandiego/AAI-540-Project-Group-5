@@ -57,6 +57,11 @@ def gains_by_decile(scored: pd.DataFrame) -> pd.DataFrame:
     return table
 
 
+def position_among(probability: float, scored: pd.DataFrame) -> float:
+    """Where a score would land in the test ranking, as 'top x%' (smaller is better)."""
+    return float((scored['probability'] >= probability).mean() * 100)
+
+
 def actual_vs_predicted(scored: pd.DataFrame, group: pd.Series) -> pd.DataFrame:
     """Actual subscriber rate next to the average predicted probability, per group (in group order)."""
     return scored.groupby(group, sort=False).agg(actual=('y', 'mean'), predicted=('probability', 'mean'))
