@@ -5,4 +5,6 @@
 sagemaker==2.200.0
 # Imported by sagemaker.workflow but not declared as a dependency of sagemaker 2.200.0
 pytz>=2024.1
+# Reads the Parquet training split for the monitoring baseline (aws-tools endpoint --up)
+pyarrow==17.0.0
 pytest>=7.0.0
