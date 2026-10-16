@@ -47,7 +47,10 @@ def score_test(run_id: str) -> pd.DataFrame:
     """Score every test customer once per served model (the run id keys the cache)."""
     test = load_test()
     predictions = predict(test.drop(columns='y').to_dict(orient='records'))
-    return test.assign(probability=[p['probability'] for p in predictions])
+    # The data is anonymised (no names or phone numbers), so customers are identified
+    # by their position in the test split; a bank would join this ID to its CRM
+    return test.assign(customer_id=[f'TEST-{i:05d}' for i in range(1, len(test) + 1)],
+                       probability=[p['probability'] for p in predictions])
 
 
 st.set_page_config(page_title='Term deposit model', layout='wide')
@@ -104,8 +107,15 @@ with call_tab:
     cols[2].metric('Conversion', f"{summary['conversion']:.1%}", f"lift {summary['lift']:.2f}x")
     cols[3].metric('Share of all subscribers found', f"{summary['share_of_all_subscribers']:.0%}")
     called = rank(scored).head(summary['calls'])
-    st.dataframe(called.drop(columns='y'), hide_index=True, height=320)
-    st.download_button('Download the call list (CSV)', called.drop(columns='y').to_csv(index=False),
+    call_list = called[['customer_id', 'probability', 'contact', *NUMERIC, *CATEGORICAL[:-3], 'poutcome']].copy()
+    call_list.insert(0, 'call_order', range(1, len(call_list) + 1))
+    call_list = call_list.rename(columns={'contact': 'channel', 'poutcome': 'previous_outcome'})
+    st.markdown(f'**Call list: top {top_percent}% of test customers, in call order** · the data is anonymised, '
+                'so customers are identified by ID and contact channel (a bank would add phone numbers from its CRM)')
+    st.dataframe(call_list, hide_index=True, height=420,
+                 column_config={'probability': st.column_config.ProgressColumn(
+                     'probability', format='percent', min_value=0.0, max_value=1.0)})
+    st.download_button('Download the call list (CSV)', call_list.to_csv(index=False),
                        file_name=f'call_list_top_{top_percent}pct.csv', mime='text/csv')
 
 with data_tab:
