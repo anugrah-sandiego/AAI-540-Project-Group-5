@@ -17,7 +17,8 @@ aws-tools schedule     ------------>  EventBridge Scheduler  ->  pipeline run:
 aws-tools approve / rollback  ----->  Model Registry "bank-marketing-models"
 aws-tools pull-model  <------------  champion model.tar.gz  ->  docker compose up api
 aws-tools smoke-test  ------------>  serverless endpoint (created, called, deleted)
-aws-tools endpoint --up/--down --->  real-time endpoint + data capture + Model Monitor + CloudWatch dashboard
+aws-tools endpoint --up/--down --->  real-time endpoint + data capture + CloudWatch dashboard
+aws-tools drift-report  --------->  PSI drift report: captured requests vs training data
 aws-tools batch-score  ----------->  Batch Transform job with the champion
 aws-tools train-sklearn  --------->  main's training: one random forest in AWS's scikit-learn container
 PrepareData (each run)  ---------->  Feature Store "bank-marketing-batches" (new batches, offline store)
@@ -36,7 +37,8 @@ GitHub Actions "Deploy to AWS"  -->  scripts/deploy.sh or rollback, run on deman
 | `src/aws/cli.py` | aws-tools | The commands below |
 | `src/aws/registry.py` | both | Champion lookup |
 | `src/aws/feature_store.py` | aws-tools, SageMaker Processing | Feature group creation (adapted from main) and batch writes |
-| `src/aws/endpoint.py`, `monitor_preprocessor.py` | aws-tools | Real-time endpoint, data capture, Model Monitor, dashboard (adapted from main) |
+| `src/aws/endpoint.py` | aws-tools | Real-time endpoint, data capture, CloudWatch dashboard (adapted from main) |
+| `src/aws/drift.py` | aws-tools | Drift report on captured requests (replaces Model Monitor, closed to new AWS customers) |
 | `src/aws/batch.py` | aws-tools | Batch Transform scoring (adapted from main) |
 | `src/aws/sklearn_training.py`, `sklearn/train.py` | aws-tools, SageMaker Training | main's scikit-learn container training (script unchanged from main) |
 | `.github/workflows/deploy.yml` | GitHub Actions | Manual deploy or rollback with lab keys from repository secrets |
@@ -51,7 +53,7 @@ GitHub Actions "Deploy to AWS"  -->  scripts/deploy.sh or rollback, run on deman
 | `runs/<execution id>/{train,eval,report,evaluation}/` | Per-run dataset version and decision |
 | `models/` | Training job outputs (`model.tar.gz`, MLflow run) |
 | `feature-store/` | Offline store of the feature group: every new batch with its arrival time |
-| `monitoring/capture/`, `monitoring/baseline/`, `monitoring/reports/` | Captured endpoint traffic, training baseline, hourly data-quality reports |
+| `monitoring/capture/`, `monitoring/reports/` | Captured endpoint traffic and drift reports |
 | `batch/<job>/` | Batch Transform input and output |
 | `processed/`, `sklearn-models/` | Splits uploaded by `train-sklearn` and its model output |
 
@@ -89,14 +91,18 @@ docker compose run --rm aws-tools schedule --off                         # remov
 docker compose run --rm aws-tools pull-model && docker compose up api
 docker compose run --rm aws-tools rollback                   # if the champion misbehaves
 docker compose run --rm aws-tools batch-score                # rank the test split with the champion -> batch_scores.csv
-docker compose run --rm aws-tools endpoint --up              # live endpoint + monitoring + dashboard (bills hourly)
+docker compose run --rm aws-tools endpoint --up              # live endpoint + capture + dashboard (bills hourly)
+docker compose run --rm aws-tools drift-report               # captured requests vs training data (PSI)
 docker compose run --rm aws-tools endpoint --down            # ALWAYS run when finished
 docker compose run --rm aws-tools train-sklearn              # main's scikit-learn container training
 ```
 
 **Cost:** pipeline runs, batch scoring and `train-sklearn` cost cents and leave nothing
-running. `endpoint --up` runs an `ml.t2.medium` instance (about $1.10 per day) plus an
-hourly monitoring job (about $0.12 per run) until `endpoint --down`.
+running. `endpoint --up` runs an `ml.m5.large` instance (about $0.12 per hour, $2.80 per day)
+until `endpoint --down`; the lab's policy denies `ml.t2.medium`. SageMaker Model
+Monitor's data-quality jobs are closed to new customers, so `drift-report` compares
+the captured requests with the training data instead (PSI; reliable from about 500
+captured customers).
 
 **GitHub "Deploy to AWS" button** (Actions tab, `main` only): set the repository secrets
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` to fresh lab keys,

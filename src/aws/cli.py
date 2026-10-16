@@ -14,8 +14,9 @@ AWS as LabRole instead. Run inside the aws-tools container:
     pull-model       download the champion for the local API
     smoke-test       deploy the champion to a serverless endpoint, score one record, delete it
     schedule         run the pipeline once at a time, yearly, or turn the schedule off
-    endpoint         --up: champion on a real-time endpoint with monitoring and a dashboard
+    endpoint         --up: champion on a real-time endpoint with data capture and a dashboard
                      (bills hourly); --down: remove all of it
+    drift-report     compare the endpoint's captured requests with the training data (PSI)
     batch-score      score a CSV of customers with the champion (Batch Transform)
     train-sklearn    main's cloud training: one random forest in AWS's scikit-learn container
 """
@@ -33,6 +34,7 @@ from sagemaker.workflow.pipeline_context import PipelineSession
 
 from src.aws.batch import batch_score
 from src.aws.config import MODEL_GROUP, PIPELINE_NAME, AwsConfig, session
+from src.aws.drift import drift_report
 from src.aws.endpoint import endpoint_down, endpoint_up
 from src.aws.feature_store import ensure_feature_group
 from src.aws.sklearn_training import train_sklearn
@@ -240,7 +242,10 @@ def main() -> None:
     endpoint_state = endpoint_args.add_mutually_exclusive_group(required=True)
     endpoint_state.add_argument('--up', action='store_true')
     endpoint_state.add_argument('--down', action='store_true')
-    endpoint_args.add_argument('--instance-type', default='ml.t2.medium', help='about $1.10 per day while up')
+    # The lab allows ml.m5.large for endpoints (ml.t2.medium is denied by its policy)
+    endpoint_args.add_argument('--instance-type', default='ml.m5.large', help='about $0.12 per hour while up')
+    drift_args = commands.add_parser('drift-report')
+    drift_args.add_argument('--reference', default='data/processed/train.parquet')
     batch_args = commands.add_parser('batch-score')
     batch_args.add_argument('--input', default='data/processed/test.parquet', help='CSV (;-separated) or Parquet')
     batch_args.add_argument('--output', default='batch_scores.csv')
@@ -269,6 +274,9 @@ def main() -> None:
             endpoint_up(cfg, aws, args.instance_type)
         else:
             endpoint_down(aws)
+    elif args.command == 'drift-report':
+        reference = pd.read_parquet(args.reference).drop(columns=['y', 'duration'], errors='ignore')
+        print(drift_report(cfg, aws, reference).to_string())
     elif args.command == 'batch-score':
         batch(cfg, aws, args.input, args.output)
     elif args.command == 'train-sklearn':

@@ -1,9 +1,10 @@
 """
-Tests for batch scoring, the Feature Store, the real-time endpoint and its monitoring,
+Tests for batch scoring, the Feature Store, the real-time endpoint and the drift report,
 without calling AWS (botocore Stubber). Run in the aws-tools image:
     docker compose run --rm aws-test
 """
 
+import base64
 import json
 from types import SimpleNamespace
 
@@ -16,7 +17,7 @@ pytest.importorskip('sagemaker')
 from src.aws import endpoint, feature_store  # noqa: E402
 from src.aws.batch import CHUNK, from_responses, to_requests  # noqa: E402
 from src.aws.config import AwsConfig  # noqa: E402
-from src.aws.monitor_preprocessor import preprocess_handler  # noqa: E402
+from src.aws.drift import captured_instances, drift_table, psi  # noqa: E402
 
 ACCOUNT = '1' * 12
 CONFIG = AwsConfig(region='us-east-1', account=ACCOUNT, role_arn=f'arn:aws:iam::{ACCOUNT}:role/LabRole',
@@ -79,9 +80,7 @@ def test_endpoint_down_removes_everything_even_when_parts_are_gone():
     sagemaker, cloudwatch = client('sagemaker'), client('cloudwatch')
     aws = SimpleNamespace(client=lambda name: {'sagemaker': sagemaker, 'cloudwatch': cloudwatch}[name])
     with Stubber(sagemaker) as stub, Stubber(cloudwatch) as cw:
-        stub.add_client_error('delete_monitoring_schedule', 'ResourceNotFound')
-        stub.add_client_error('describe_monitoring_schedule', 'ResourceNotFound')
-        stub.add_response('delete_endpoint', {})
+        stub.add_client_error('delete_endpoint', 'ValidationException')
         stub.add_response('delete_endpoint_config', {})
         stub.add_response('delete_model', {})
         cw.add_response('delete_dashboards', {})
@@ -90,13 +89,40 @@ def test_endpoint_down_removes_everything_even_when_parts_are_gone():
         cw.assert_no_pending_responses()
 
 
-def test_monitor_preprocessor_checks_the_first_customer_of_a_request():
-    customer = make_raw_df(n=2).drop(columns=['y', 'duration']).to_dict(orient='records')
-    record = SimpleNamespace(endpoint_input=SimpleNamespace(data=json.dumps({'instances': customer})))
-    assert preprocess_handler(record) == json.loads(json.dumps(customer[0]))
+def capture_line(customers, base64_encoded=False):
+    data = json.dumps({'instances': customers})
+    if base64_encoded:
+        data = base64.b64encode(data.encode()).decode()
+    return json.dumps({'captureData': {'endpointInput': {'data': data,
+                                                         'encoding': 'BASE64' if base64_encoded else 'JSON'}}})
 
 
-def test_monitoring_baseline_uses_model_inputs_only():
+def test_captured_requests_become_one_row_per_customer():
+    customers = make_raw_df(n=3).drop(columns=['y', 'duration']).to_dict(orient='records')
+    lines = [capture_line(customers[:2]), '', capture_line(customers[2:], base64_encoded=True)]
+    frame = captured_instances(lines)
+    assert len(frame) == 3 and list(frame['age']) == [30, 31, 32]
+
+
+def test_psi_is_near_zero_for_the_same_data_and_high_for_shifted_data():
+    reference = pd.Series(range(1000))
+    assert psi(reference, reference) < 0.01
+    assert psi(reference, reference + 600) > 0.2
+    constant = pd.Series([1200] * 50)
+    assert psi(constant, constant) < 0.01 and psi(constant, constant + 1) > 0.2
+    jobs = pd.Series(['admin.'] * 80 + ['retired'] * 20)
+    assert psi(jobs, jobs) < 0.01 and psi(jobs, pd.Series(['retired'] * 80 + ['student'] * 20)) > 0.2
+
+
+def test_drift_table_flags_the_shifted_column_first():
+    reference = make_raw_df(n=200).assign(balance=range(0, 2000, 10))
+    current = reference.assign(balance=reference['balance'] + 100000)
+    table = drift_table(reference, current[['age', 'balance']])
+    assert table.index[0] == 'balance' and table.loc['balance', 'status'] == 'drift'
+    assert table.loc['age', 'status'] == 'stable'
+
+
+def test_sample_traffic_uses_model_inputs_only():
     assert list(endpoint.model_inputs(make_raw_df(n=2)).columns) == [
         c for c in make_raw_df(n=2).columns if c not in ('y', 'duration')]
 
