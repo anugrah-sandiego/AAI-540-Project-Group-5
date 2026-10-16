@@ -1,664 +1,428 @@
-# Term Deposit Prediction - Project Documentation
+# Term Deposit Prediction: an MLOps System
 
-**Group 5 Members:**
-- Dhrub Satyam
-- Anugrah Rastogi
-- Aishwarya Gulhane
+**AAI-540 Group 5:** Dhrub Satyam, Anugrah Rastogi, Aishwarya Gulhane
+**Repository:** https://github.com/anugrah-sandiego/AAI-540-Project-Group-5
 
-**Project:** AAI-540-Project-Group-5  
-**Date:** October 6, 2026
+A bank phones customers to sell term deposits, and only 11.7% say yes. This project
+ranks customers by how likely they are to subscribe, so the call centre phones the
+most promising ones first. On customers the model never saw, calling the top 10% of
+the list reaches **49.3% subscribers instead of 11.7% (4.2x better than random calling)**.
 
----
+The same code runs in two places:
 
-## Table of Contents
+- **Locally, free:** open-source stack (scikit-learn, MLflow, FastAPI, Streamlit) in Docker.
+- **In AWS SageMaker:** a pipeline that retrains as new data arrives and promotes a model
+  only after it passes four checks and a person approves it.
 
-1. [Project Overview](#project-overview)
-2. [Project Background](#project-background)
-3. [Technical Architecture](#technical-architecture)
-4. [Dataset Information](#dataset-information)
-5. [Project Structure](#project-structure)
-6. [Setup Instructions](#setup-instructions)
-7. [Pipeline Workflow](#pipeline-workflow)
-8. [Model Training](#model-training)
-9. [Model Evaluation](#model-evaluation)
-10. [MLOps with MLflow](#mlops-with-mlflow)
-11. [AWS SageMaker Deployment](#aws-sagemaker-deployment)
-12. [Usage Examples](#usage-examples)
-13. [Configuration](#configuration)
-14. [Troubleshooting](#troubleshooting)
-15. [Future Improvements](#future-improvements)
+![Architecture](docs/architecture.png)
 
 ---
 
-## Project Overview
+## Contents
 
-This project implements a production-oriented machine learning system to predict customer subscription to term deposits for a Portuguese banking institution. The system follows MLOps best practices with a complete end-to-end pipeline including data ingestion, preprocessing, feature engineering, model training, evaluation, and experiment tracking.
-
-### Key Features
-
-- **Modular Architecture**: Separated components for data ingestion, preprocessing, feature engineering, and modeling
-- **MLOps Integration**: MLflow for experiment tracking and model registry
-- **Multiple Model Support**: Logistic Regression, Decision Tree, Random Forest and Gradient Boosting, each with three class-imbalance strategies
-- **Reproducible Pipeline**: Configuration-driven workflow with version control
-- **Comprehensive Evaluation**: Multiple metrics including accuracy, precision, recall, F1-score, and ROC-AUC
-
----
-
-## Project Background
-
-### Business Problem
-
-Banking institutions conduct direct marketing campaigns (phone calls) to promote term deposit subscriptions. The challenge is to identify customers most likely to subscribe, optimizing marketing resources and improving campaign efficiency.
-
-### Dataset
-
-The project uses the **UCI Bank Marketing Dataset**, a publicly available dataset containing information from direct marketing campaigns of a Portuguese banking institution. The classification goal is to predict if the client will subscribe (yes/no) to a term deposit (variable `y`).
-
-**Dataset Source:** [UCI Machine Learning Repository](https://archive.ics.uci.edu/dataset/222/bank+marketing)
-
-**Dataset Size:** 45,211 records with 17 features
+1. [Quick start (local, about 15 minutes)](#quick-start-local)
+2. [Run it in AWS](#run-it-in-aws)
+3. [How it works](#how-it-works)
+4. [Project structure](#project-structure)
+5. [Data](#data)
+6. [Model and results](#model-and-results)
+7. [CI/CD](#cicd)
+8. [Configuration](#configuration)
+9. [Troubleshooting](#troubleshooting)
+10. [Future improvements](#future-improvements)
+11. [References](#references)
 
 ---
 
-## Technical Architecture
+## Quick start (local)
 
-### Technology Stack
+Everything runs in Docker, so you do not need to install Python or any packages.
 
-- **Language:** Python 3.10+
-- **Data Processing:** pandas, numpy
-- **Machine Learning:** scikit-learn
-- **MLOps:** MLflow
-- **Visualization:** matplotlib, seaborn
-- **Configuration:** PyYAML
-- **Containerization:** Docker
-- **Testing:** pytest
+### 1. Install the tools
 
-### Architecture Components
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/), started and running
+- [Git](https://git-scm.com/downloads) (on Windows, Git for Windows also gives you Git Bash)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Data Ingestion Layer                      │
-│  - Load semicolon-separated CSV / Excel / Parquet             │
-│  - Schema & data-quality validation (columns, types, nulls,  │
-│    target values, duplicates, 'unknown' rates)               │
-│  - Stratified, shuffled 70 / 15 / 15 train/val/test split    │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│        Feature Engineering + Preprocessing (sklearn Pipeline) │
-│  - Drop 'duration' (post-call leakage)                       │
-│  - Domain features: previously_contacted, prior_success,     │
-│    log_campaign, log_previous, negative_balance              │
-│  - One-hot encode nominal categoricals, scale numerics       │
-│  - Fitted on the training split only                         │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                    Model Training Layer                       │
-│  - Logistic Regression, Decision Tree, Random Forest,        │
-│    Gradient Boosting (HistGradientBoosting)                  │
-│  - Class-imbalance strategies: none / class_weight / SMOTE   │
-│  - Shuffled stratified 5-fold CV, selection by PR-AUC        │
-│  - Bounded RandomizedSearchCV on the best candidate          │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                  Model Evaluation Layer                       │
-│  - Decision threshold tuned on validation (max F1)           │
-│  - Test: precision, recall, F1, ROC-AUC, PR-AUC, confusion   │
-│  - Business: conversion & lift in top 10 / 20 / 30 %         │
-│  - Quality gates (ROC-AUC, lift@10) fail the pipeline        │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│                MLOps Layer (MLflow, SQLite backend)           │
-│  - Nested run per model/strategy, comparison table           │
-│  - Parameters, metrics, data-quality report, model artifact  │
-│  - models/model.joblib + model_metadata.json for serving     │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Dataset Information
-
-### Data Source
-
-**File:** `data/raw/bank-full.csv`  
-**Format:** Semicolon-separated CSV  
-**Records:** 45,211  
-**Features:** 17 + 1 target variable
-
-### Features
-
-| Feature | Type | Description |
-|---------|------|-------------|
-| age | numeric | Age of the client |
-| job | categorical | Type of job (admin, technician, services, etc.) |
-| marital | categorical | Marital status (married, single, divorced) |
-| education | categorical | Education level (primary, secondary, tertiary) |
-| default | categorical | Has credit in default? (yes, no) |
-| balance | numeric | Average yearly balance in euros |
-| housing | categorical | Has housing loan? (yes, no) |
-| loan | categorical | Has personal loan? (yes, no) |
-| contact | categorical | Contact communication type |
-| day | numeric | Last contact day of the month |
-| month | categorical | Last contact month of year |
-| duration | numeric | Last contact duration, in seconds |
-| campaign | numeric | Number of contacts performed during campaign |
-| pdays | numeric | Days passed since last contact |
-| previous | numeric | Number of contacts performed before this campaign |
-| poutcome | categorical | Outcome of previous marketing campaign |
-| y | target | Has the client subscribed? (yes, no) |
-
-### Data Characteristics
-
-- **Class Imbalance:** The dataset is imbalanced with approximately 11.7% positive class (subscribers)
-- **Chronological Ordering:** Rows are ordered by contact date (May 2008 – Nov 2010) and the positive rate rises from ~3% in the first fifth of the file to ~32% in the last fifth. Splits and CV folds must be shuffled; this is also a real drift signal to monitor in production.
-- **Missing Values:** No nulls, but some categoricals contain "unknown" (poutcome 82%, contact 29%, education 4%, job <1%), which is kept as its own category
-- **Leakage:** `duration` is only known after the call, so it is excluded from the pre-contact model
-- **Data Types:** Mix of numerical and categorical features
-
----
-
-## Project Structure
-
-```
-AAI-540-Project-Group-5/
-├── data/
-│   ├── raw/                    # Raw data files
-│   │   ├── bank-full.csv       # Full dataset (45,211 records)
-│   │   ├── bank.csv            # Sample dataset (10%)
-│   │   └── bank-names.txt      # Feature descriptions
-│   ├── processed/              # train/val/test Parquet splits (generated)
-│   └── external/               # External reference data
-├── notebooks/
-│   ├── exploratory_data_analysis.ipynb    # EDA notebook
-│   ├── model_development.ipynb           # Model training notebook
-│   └── model_evaluation.ipynb             # Model evaluation notebook
-├── src/
-│   ├── data_ingestion/
-│   │   └── data_ingestion.py              # Data loading and validation
-│   ├── data_preprocessing/
-│   │   └── data_preprocessing.py          # Data cleaning and transformation
-│   ├── feature_engineering/
-│   │   └── feature_engineering.py         # Feature creation and selection
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── train_model.py                 # Model training with MLflow
-│   │   └── predict_model.py               # Model prediction and evaluation
-│   ├── utils/
-│   │   ├── helpers.py                     # Config loading
-│   │   ├── logging_config.py              # Shared logging setup
-│   │   └── lineage.py                     # Model lineage and uncommitted-code check
-│   ├── pipelines/
-│   │   └── training_pipeline.py            # End-to-end training pipeline
-│   ├── serving/
-│   │   └── app.py                         # FastAPI prediction service
-│   └── aws/                               # SageMaker pipeline + aws-tools (docs/aws.md)
-│       ├── pipeline.py, cli.py, config.py, registry.py
-│       └── steps/                         # prepare, train, evaluate
-├── docker/                                # train / serve launch scripts for SageMaker
-├── src/ui/                               # Streamlit dashboard (app.py) and its calculations (analysis.py)
-├── scripts/deploy.sh                      # Push this commit's image to ECR and start the pipeline
-├── docs/aws.md                            # AWS architecture and lab runbook
-├── models/                                # model.joblib + model_metadata.json (generated)
-├── tests/                                 # pytest suite; tests/aws needs the SageMaker SDK
-├── .github/workflows/ci-cd.yml            # CI: lint, tests, image build
-├── requirements.txt, constraints.txt      # Dependencies and exact tested versions
-├── requirements-aws.txt                   # aws-tools image dependencies
-├── Dockerfile, docker-compose.yml         # base / dev / aws / runtime images and services
-├── config.yaml                           # Project configuration
-└── README.md                             # This file
-```
-
----
-
-## Setup Instructions
-
-### Prerequisites
-
-- Python 3.10 or higher
-- pip package manager
-- Git (for cloning the repository)
-
-### Installation Steps
-
-1. **Clone the Repository**
-   ```bash
-   git clone https://github.com/anugrah-sandiego/AAI-540-Project-Group-5.git
-   cd AAI-540-Project-Group-5
-   ```
-
-2. **Create Virtual Environment (Recommended)**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Verify Installation**
-   ```bash
-   python -c "import pandas, sklearn, mlflow; print('Dependencies installed successfully')"
-   ```
-
-5. **Set Environment Variables (Optional)**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your specific configurations
-   ```
-
----
-
-## Pipeline Workflow
-
-### Step 1: Data Ingestion
-
-**Location:** `src/data_ingestion/data_ingestion.py`
-
-**Functions:**
-- `load_data(file_path, sep=',')`: Loads CSV, Excel or Parquet files
-- `validate_schema(df)`: Checks expected columns, numeric types, nulls, target values; returns a data-quality report
-- `split_data(X, y, val_size, test_size, random_state)`: Stratified, shuffled train/val/test split
-
-```python
-from src.data_ingestion.data_ingestion import load_data, validate_schema, split_data
-
-df = load_data('data/raw/bank-full.csv', sep=';')
-report = validate_schema(df)
-```
-
-### Step 2: Preprocessing and Feature Engineering
-
-**Locations:** `src/data_preprocessing/data_preprocessing.py`, `src/feature_engineering/feature_engineering.py`
-
-- `encode_target(y)`: Maps yes/no to 1/0
-- `build_preprocessor(numeric_cols, categorical_cols)`: `ColumnTransformer` with `StandardScaler` and `OneHotEncoder(handle_unknown='ignore')`
-- `add_domain_features(df)`: Stateless, row-wise pre-contact features (`DOMAIN_FEATURES`)
-
-These are not applied to the data up front. They are steps inside the model pipeline, so they are fitted on training folds only and the saved model accepts raw columns.
-
-### Step 3: Model Training
-
-**Location:** `src/models/train_model.py`
-
-- `build_model(model_type, numeric_cols, categorical_cols, imbalance_strategy)`: Builds an imblearn `Pipeline` of features → preprocess → [SMOTE] → classifier
-- `compare_models(...)`: Cross-validates every model × imbalance strategy and logs each as a nested MLflow run
-- `hyperparameter_tuning(...)`: Bounded `RandomizedSearchCV` optimising PR-AUC
-
-**Models:** `logistic_regression`, `decision_tree`, `random_forest`, `gradient_boosting`
-**Imbalance strategies:** `none`, `class_weight` (balanced loss), `smote` (oversampling inside CV folds only)
-
-### Step 4: Model Evaluation
-
-**Location:** `src/models/predict_model.py`
-
-- `predict_proba(model, X)`: Positive-class probabilities
-- `predict_model(model, X, threshold)`: Class predictions at a tuned threshold
-- `find_best_threshold(y_val, proba)`: Threshold maximising F1 on validation data
-- `lift_at_k(y, proba, [10, 20, 30])`: Conversion rate and lift in the top-k% scored customers
-- `evaluate_model(model, X, y, threshold)`: Technical + business metrics
-- `get_feature_importance(model, feature_names)`: Works with a bare estimator or the pipeline
-
----
-
-## Model Training
-
-### Running the Training Pipeline
+### 2. Get the code
 
 ```bash
-python -m src.pipelines.training_pipeline
+git clone https://github.com/anugrah-sandiego/AAI-540-Project-Group-5.git
+cd AAI-540-Project-Group-5
+git checkout aishwarya
 ```
 
-**Pipeline Steps:**
-1. Load configuration from `config.yaml`
-2. Load and validate data, log the data-quality report
-3. Drop excluded (leaky) features and encode the target
-4. Stratified 70/15/15 split; save splits to `data/processed/*.parquet`
-5. Cross-validate 4 models × 3 imbalance strategies on the training split
-6. Tune the best candidate (by CV PR-AUC)
-7. Choose the decision threshold on the validation split
-8. Evaluate once on the test split (technical + business metrics)
-9. Check quality gates; fail the run if they are not met
-10. Log everything to MLflow and save `models/model.joblib` and `models/model_metadata.json`
+### 3. Build the images (first time, a few minutes)
 
-### Results (test split, 6,782 customers, `duration` excluded)
-
-Cross-validation on the training split (mean of 5 shuffled folds, default 0.5 threshold for F1):
-
-| Model | Strategy | ROC-AUC | PR-AUC | F1 | Recall |
-|---|---|---|---|---|---|
-| Logistic Regression | class_weight | 0.766 | 0.406 | 0.378 | 0.624 |
-| Decision Tree | class_weight | 0.754 | 0.354 | 0.415 | 0.553 |
-| Random Forest | none | **0.791** | **0.445** | 0.290 | 0.185 |
-| Random Forest | class_weight | 0.790 | 0.438 | 0.471 | 0.515 |
-| Random Forest | smote | 0.783 | 0.419 | 0.439 | 0.399 |
-| Gradient Boosting | class_weight | 0.794 | 0.442 | 0.455 | 0.617 |
-
-Selected model: tuned Random Forest (`max_depth=16, max_features=0.5, min_samples_leaf=8, n_estimators=314`), decision threshold 0.169 chosen on validation.
-
-| Metric | Threshold 0.50 | Tuned threshold 0.169 |
-|---|---|---|
-| Precision | 0.620 | 0.432 |
-| Recall | 0.216 | 0.532 |
-| F1 | 0.320 | **0.477** |
-
-ROC-AUC 0.793, PR-AUC 0.440.
-
-| Targeted segment | Conversion | Lift vs. random outreach (11.7%) |
-|---|---|---|
-| Top 10% | 49.3% | 4.22× |
-| Top 20% | 35.4% | 3.03× |
-| Top 30% | 26.8% | 2.29× |
-
-**Findings on class imbalance:** class weights and SMOTE raise F1 at the default 0.5 threshold because they shift predicted probabilities upwards, but they do not improve ranking quality (ROC-AUC / PR-AUC). SMOTE was consistently slightly worse than class weights. Tuning the decision threshold on validation data gives the same F1 gain without distorting probabilities, so the selected model uses no resampling plus a tuned threshold. The earlier baseline F1 of ~0.11 was mostly an artefact of unshuffled CV folds over chronologically ordered data, not of class imbalance.
-
----
-
-## Model Evaluation
-
-### Evaluation Metrics
-
-- **ROC-AUC / PR-AUC:** Threshold-independent ranking quality; PR-AUC is the model-selection metric because it focuses on the minority class
-- **Precision / Recall / F1:** Reported at the default and the tuned threshold
-- **Confusion matrix:** TP / FP / TN / FN counts logged to MLflow
-- **Conversion and lift @ 10/20/30%:** Business value of targeting the highest-scored customers
-- Accuracy is reported but never used for selection (an all-"no" model scores 88%)
-
-### Quality Gates
-
-Configured in `config.yaml` under `training.quality_gates` (currently ROC-AUC ≥ 0.75 and lift@10 ≥ 2.5). The pipeline raises an error and tags the MLflow run `quality_gates_passed=False` if the test metrics fall below them.
-
----
-
-## MLOps with MLflow
-
-### MLflow Tracking
-
-**Start MLflow UI:**
 ```bash
-mlflow ui --backend-store-uri sqlite:///mlflow.db
+docker compose build
 ```
 
-**Access:** http://localhost:5000
+### 4. Run the tests
 
-### Experiment Tracking
+```bash
+docker compose run --rm test
+```
 
-Each pipeline run creates a parent run `training_pipeline` with:
-- Nested runs for every model × imbalance strategy (CV metrics)
-- `model_comparison.json` table and `data_quality_report.json`
-- Selected model type, strategy, hyperparameters and decision threshold
-- Validation and test metrics, including lift and conversion
-- The fitted pipeline with signature and input example
+All tests should pass. This also confirms Docker works.
 
-### Loading a Trained Model
+### 5. Train the model
 
-```python
-import json, joblib
+```bash
+docker compose run --rm train
+```
 
-model = joblib.load('models/model.joblib')
-threshold = json.load(open('models/model_metadata.json'))['decision_threshold']
+This takes several minutes. It compares 12 candidate models, tunes the best one, checks
+it against the quality gates and saves it to `models/`. It also writes the
+train, validation and test splits to `data/processed/`.
 
-proba = model.predict_proba(raw_customers_df)[:, 1]   # raw columns, no preprocessing needed
-predicted = proba >= threshold
+> Training refuses to run from uncommitted code, so every model can be traced to a git
+> commit. To experiment with uncommitted changes, add `-e ALLOW_DIRTY=1`:
+> `docker compose run --rm -e ALLOW_DIRTY=1 train`
+
+### 6. Open the dashboard
+
+```bash
+docker compose up ui
+```
+
+Open http://localhost:8501. This also starts the prediction API on port 8080. Stop both with `Ctrl+C`.
+
+| Tab | What you see |
+|---|---|
+| Who to call | A slider for "call the top X%", the ranked call list with customer IDs, a CSV download, and a form to check one potential customer |
+| Test data analytics | Subscriber rate by month and by segment (previous outcome, housing loan, contact type, age band, job) |
+| Model performance | ROC-AUC, lift, gains curve, and actual vs predicted by month and by tenth of the list |
+
+The sidebar switches the scores between the **local model** and the **AWS model** (the
+SageMaker endpoint; see [Run it in AWS](#run-it-in-aws)). Every figure uses only the held-out
+test split (6,782 customers the model never trained on).
+
+### 7. Optional: other local tools
+
+```bash
+docker compose up api        # prediction API only: http://localhost:8080/docs
+docker compose up mlflow     # MLflow experiment tracking: http://localhost:5000
+docker compose run --rm shell   # a shell inside the container
+```
+
+Example prediction request:
+
+```bash
+curl -X POST http://localhost:8080/predict -H "Content-Type: application/json" -d '{"instances": [{"age": 35, "job": "management", "marital": "married", "education": "tertiary", "default": "no", "balance": 1200, "housing": "no", "loan": "no", "contact": "cellular", "day": 15, "month": "may", "campaign": 1, "pdays": -1, "previous": 0, "poutcome": "unknown"}]}'
 ```
 
 ---
 
-## AWS SageMaker Deployment
+## Run it in AWS
 
-A yearly SageMaker Pipeline retrains and evaluates the model in AWS, running the
-project's own Docker image for every step; the full architecture, S3 layout and
-lab runbook are in [docs/aws.md](docs/aws.md).
+The AWS part was built for an **AWS Academy Learner Lab**. The full runbook, the S3
+layout and the lab's limits are in [docs/aws.md](docs/aws.md); this section covers the main path.
 
-- **Pipeline** (`src/aws/pipeline.py`): prepare data, skip if there is too little new data, train a challenger, compare it with the champion on data neither has seen, then register it pending approval or reject it with reasons.
-- **Serving** (`src/serving/app.py`): one FastAPI app answers SageMaker (`/ping`, `/invocations`) and local clients (`/predict`); every prediction returns the model's run, commit and threshold.
-- **Operations** (`aws-tools`, run in Docker with the lab keys in `.env`): `check`, `replay`, `deploy-pipeline`, `approve`, `rollback`, `pull-model`, `smoke-test`, `schedule`, `endpoint --up/--down` (real-time endpoint with data capture and a CloudWatch dashboard), `drift-report` (captured requests vs training data, PSI), `batch-score` (Batch Transform) and `train-sklearn` (main's scikit-learn container training). PrepareData also writes each new batch to a Feature Store group.
-- **CI** (`.github/workflows/ci-cd.yml`): lint, tests and an image build on every push.
-- **CD** (`.github/workflows/deploy.yml`): a manual "Deploy to AWS" button on `main` that runs `scripts/deploy.sh` or rolls back the champion, using lab keys from repository secrets.
+### 1. Put the lab keys in `.env`
+
+1. Start the lab and wait for the green dot.
+2. Open **AWS Details**, then next to **AWS CLI** click **Show**.
+3. Create a file named `.env` in the project root with:
+
+```
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=...
+AWS_REGION=us-east-1
+```
+
+`.env` is git-ignored: never commit or share it. The keys expire after about 4 hours, so
+repeat these steps when commands start failing with `ExpiredToken`.
+
+### 2. Check access and upload data
+
+```bash
+docker compose run --rm aws-tools check                 # who am I; can the scheduler use LabRole?
+docker compose run --rm aws-tools replay --batches 4    # history + 3 daily batches to S3
+```
+
+The dataset has no live feed, so `replay` simulates one. Batch `b0000` is the history
+(the first 31,500 rows, in date order). Each later batch is 350 rows and stands for one day of new calls.
+
+### 3. Deploy and run the training pipeline
+
+Run this from Git Bash on Windows, or any terminal on Mac or Linux. Commit your changes first.
 
 ```bash
 scripts/deploy.sh
 ```
 
----
+It builds this commit's Docker image and pushes it to ECR. It then creates or updates the
+SageMaker pipeline `bank-marketing-retrain` and starts a run. Watch the run in
+**SageMaker Studio > Pipelines**; it takes about 15 to 25 minutes.
 
-## Dashboard
-
-A Streamlit dashboard (`src/ui/app.py`) built on the **held-out test split only** (6,782 customers held out from training in `data/processed/test.parquet`). It gets every score from the prediction API and never loads the model itself.
+### 4. Approve, serve and monitor
 
 ```bash
-docker compose run --rm train     # once, to create the model and the test split
-docker compose up ui              # starts the API too; open http://localhost:8501
+docker compose run --rm aws-tools approve           # newest pending model becomes the champion
+docker compose run --rm aws-tools batch-score       # score the test split with Batch Transform
+docker compose run --rm aws-tools endpoint --up     # real-time endpoint + data capture + CloudWatch dashboard
+docker compose run --rm aws-tools drift-report      # compare captured requests with training data (PSI)
+docker compose run --rm aws-tools endpoint --down   # ALWAYS run this when finished
 ```
 
-| Tab | Shows |
+While the endpoint is up, choose **AWS model** in the dashboard's sidebar to see its scores.
+
+### 5. Next runs
+
+```bash
+docker compose run --rm aws-tools replay --batches 3                      # the next "days" of data
+docker compose run --rm aws-tools deploy-pipeline --image-tag <commit> --start   # run now
+docker compose run --rm aws-tools schedule --once 2026-10-20T10:00:00     # or schedule one run
+docker compose run --rm aws-tools rollback                                # restore the previous champion
+docker compose run --rm aws-tools --help                                  # every command
+```
+
+### Cost
+
+| What | Cost |
 |---|---|
-| Who to call | Test customers ranked by the API; a "call the top X%" slider with subscribers reached vs random calling; CSV download |
-| Test data analytics | Subscriber rate by contact month and by segment (previous outcome, housing loan, contact type, age band, job); share of unknown values |
-| Model performance | ROC-AUC, lift and gains by tenth of the ranked list (computed live from the API's scores), metrics recorded at training, model lineage |
-
-The API (`src/serving/app.py`) answers `GET /ping`, `POST /predict` (same as SageMaker's `/invocations`) and `GET /model` (which model is serving: type, cut-off, test metrics, commit, data hash).
+| Pipeline run, Batch Transform, `train-sklearn` | A few cents each; nothing is left running |
+| Real-time endpoint (`ml.m5.large`) | About $0.12 per hour, $2.80 per day, until `endpoint --down` |
+| S3, ECR, Feature Store storage | Cents per month |
 
 ---
 
-## Usage Examples
+## How it works
 
-### Example 1: Quick Start with Training Pipeline
+### Local training (`src/pipelines/training_pipeline.py`)
 
-```bash
-python -m src.pipelines.training_pipeline
+1. Load `bank-full.csv` and validate it: columns, types, nulls, labels, duplicates and "unknown" rates.
+2. Drop `duration`, the call length, because it is only known after the call.
+3. Make a stratified, shuffled 70/15/15 split into train, validation and test.
+4. Compare 12 candidates with 5-fold cross-validation, ranked by PR-AUC: 4 models
+   (logistic regression, decision tree, random forest, gradient boosting) × 3 ways of
+   handling the rare class (none, class weights, SMOTE).
+5. Tune the best candidate (20 random-search iterations).
+6. Choose the decision cut-off on the validation split.
+7. Evaluate once on the test split. The run fails unless ROC-AUC ≥ 0.75 and lift in the top 10% ≥ 2.5.
+8. Log everything to MLflow. Save `models/model.joblib` and `model_metadata.json`
+   with the commit, branch and data hash.
+
+### Continuous training in AWS (`src/aws/pipeline.py`)
+
+Every pipeline run retrains from scratch on a growing window of data and is judged on
+data that arrived later. Runs are started by hand or by EventBridge Scheduler.
+
+1. **PrepareData** validates every batch and quarantines bad ones. Batches seen before become
+   training data; batches new in this run become evaluation data. It also writes new batches
+   to the Feature Store.
+2. **EnoughNewData** stops the run unless at least 1,000 new rows have arrived.
+3. **TrainChallenger** runs the same training as locally, then refits on all the history.
+4. **EvaluateChallenger** scores the challenger and the current champion on the new data.
+   The challenger must pass all four checks:
+    - ROC-AUC ≥ 0.75
+    - lift@10 ≥ 2.5
+    - PR-AUC no more than 0.01 below the champion's
+    - recall in every age band at least 80% of overall recall
+5. **RegisterChallenger** registers it as *pending approval*, or **RejectChallenger** fails
+   the run with the reasons. Nothing is served until a person runs `aws-tools approve`.
+
+The newest customers subscribe far more often than the history, so cloud runs score lower than
+the local shuffled test. The last full run (October 2026) was rejected on all four checks
+(ROC-AUC 0.633). The checks did their job: a weaker model never reached production.
+
+### Serving (`src/serving/app.py`)
+
+One FastAPI app serves both local clients and SageMaker:
+
+| Route | Purpose |
+|---|---|
+| `GET /ping` | Health check |
+| `POST /predict`, `POST /invocations` | Probabilities for a list of customers (SageMaker calls `/invocations`) |
+| `GET /model` | Which model is serving: type, cut-off, test metrics, commit, data hash |
+
+The model accepts raw columns; all preprocessing is inside the saved scikit-learn pipeline.
+
+---
+
+## Project structure
+
+```
+AAI-540-Project-Group-5/
+├── config.yaml                  # data split, models, tuning, quality gates, MLflow
+├── data/raw/                    # bank-full.csv (45,211 rows), bank.csv (10% sample), bank-names.txt
+├── data/processed/              # train / val / test Parquet splits (generated)
+├── models/                      # model.joblib + model_metadata.json (generated)
+├── notebooks/                   # EDA, model development and evaluation notebooks
+├── src/
+│   ├── data_ingestion/          # load and validate data, split
+│   ├── data_preprocessing/      # target encoding, scaler + one-hot encoder
+│   ├── feature_engineering/     # domain features (previously_contacted, prior_success, ...)
+│   ├── models/                  # build, compare, tune (train_model.py); predict, evaluate, lift (predict_model.py)
+│   ├── pipelines/               # training_pipeline.py: the end-to-end local training run
+│   ├── serving/app.py           # FastAPI prediction service (local and SageMaker)
+│   ├── ui/                      # Streamlit dashboard (app.py) and its calculations (analysis.py)
+│   ├── utils/                   # config loading, logging, model lineage
+│   └── aws/
+│       ├── cli.py               # aws-tools: every AWS command
+│       ├── config.py            # names of the bucket, pipeline, registry, endpoint
+│       ├── pipeline.py          # SageMaker pipeline definition
+│       ├── steps/               # prepare.py, train.py, evaluate.py: the pipeline's jobs
+│       ├── registry.py          # champion lookup in the Model Registry
+│       ├── feature_store.py     # Feature Store group and batch writes
+│       ├── endpoint.py          # real-time endpoint, data capture, CloudWatch dashboard
+│       ├── drift.py             # PSI drift report on captured requests
+│       ├── batch.py             # Batch Transform scoring
+│       └── sklearn_training.py, sklearn/   # training in AWS's scikit-learn container
+├── tests/                       # pytest suite; tests/aws needs the SageMaker SDK
+├── docker/                      # train / serve entry scripts for SageMaker
+├── scripts/deploy.sh            # push this commit's image to ECR and start the pipeline
+├── docs/                        # aws.md runbook, architecture.png, cicd-flow.png
+├── .github/workflows/           # ci-cd.yml (CI), deploy.yml (manual Deploy to AWS button)
+├── Dockerfile                   # images: dev, aws (aws-tools), ui, runtime (SageMaker)
+├── docker-compose.yml           # services: test, train, mlflow, shell, api, ui, aws-tools, aws-test
+└── requirements*.txt, constraints.txt   # dependencies and exact tested versions
 ```
 
-### Example 2: Custom Training in Notebook
+---
 
-```python
-from src.data_ingestion.data_ingestion import load_data, split_data, NUMERIC_COLUMNS, CATEGORICAL_COLUMNS
-from src.data_preprocessing.data_preprocessing import encode_target
-from src.feature_engineering.feature_engineering import DOMAIN_FEATURES
-from src.models.train_model import build_model
-from src.models.predict_model import find_best_threshold, evaluate_model, predict_proba
+## Data
 
-df = load_data('data/raw/bank-full.csv', sep=';')
-X, y = df.drop(columns=['y', 'duration']), encode_target(df['y'])
-X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y)
+[UCI Bank Marketing](https://archive.ics.uci.edu/dataset/222/bank+marketing): 45,211 phone
+calls by a Portuguese bank, May 2008 to November 2010. It has 16 inputs and the label `y`
+(subscribed, yes or no).
 
-numeric_cols = [c for c in NUMERIC_COLUMNS if c != 'duration'] + DOMAIN_FEATURES
-model = build_model('gradient_boosting', numeric_cols, CATEGORICAL_COLUMNS, 'class_weight')
-model.fit(X_train, y_train)
+| Feature | Type | Description |
+|---|---|---|
+| age | numeric | Age of the client |
+| job | categorical | Type of job (admin, technician, services, ...) |
+| marital | categorical | Marital status |
+| education | categorical | primary, secondary, tertiary, unknown |
+| default | categorical | Has credit in default? |
+| balance | numeric | Average yearly balance in euros |
+| housing, loan | categorical | Has a housing loan / personal loan? |
+| contact | categorical | Contact type (cellular, telephone, unknown) |
+| day, month | numeric, categorical | Day and month of the last contact (no year) |
+| duration | numeric | Call length in seconds; **excluded**, only known after the call |
+| campaign | numeric | Contacts during this campaign |
+| pdays | numeric | Days since the last contact in a previous campaign (-1 = never) |
+| previous | numeric | Contacts before this campaign |
+| poutcome | categorical | Outcome of the previous campaign |
+| y | target | Subscribed to a term deposit? |
 
-threshold = find_best_threshold(y_val, predict_proba(model, X_val))['threshold']
-print(evaluate_model(model, X_test, y_test, threshold))
-```
+- **Imbalanced:** 5,289 yes (11.7%) and 39,922 no.
+- **In date order, with drift:** the subscription rate climbs from about 3% in the first fifth
+  of the file to about 32% in the last fifth. Local splits are shuffled; AWS evaluates on later batches.
+- **"unknown" values:** kept as their own category (poutcome 82%, contact 29%, education 4%).
+- **No personal data:** no names or phone numbers. The dashboard gives test customers generated IDs (`TEST-00001`).
 
-### Example 3: Running Tests
+---
 
-```bash
-pytest tests/
-```
+## Model and results
 
-### Example 4: Docker Deployment
+Selected model: a random forest with no resampling and a tuned cut-off of 0.169
+(`n_estimators` 314, `max_depth` 16, `min_samples_leaf` 8, `max_features` 0.5).
 
-```bash
-# Build image
-docker build -t term-deposit-prediction .
+**Test split (6,782 customers):**
 
-# Run container
-docker run term-deposit-prediction
-```
+| Metric | Value |
+|---|---|
+| ROC-AUC | 0.793 |
+| PR-AUC | 0.440 |
+| F1 / precision / recall at the tuned cut-off | 0.477 / 0.432 / 0.532 |
+
+| Customers called | Conversion | Lift vs random (11.7%) |
+|---|---|---|
+| Top 10% | 49.3% | 4.22x |
+| Top 20% | 35.4% | 3.03x |
+| Top 30% | 26.8% | 2.29x |
+
+**Cross-validation on the training split** (mean of 5 folds; F1 at the default 0.5 cut-off):
+
+| Model | Strategy | ROC-AUC | PR-AUC | F1 |
+|---|---|---|---|---|
+| Random forest | none | **0.791** | **0.445** | 0.290 |
+| Gradient boosting | class weights | 0.794 | 0.442 | 0.455 |
+| Random forest | class weights | 0.790 | 0.438 | 0.471 |
+| Random forest | SMOTE | 0.783 | 0.419 | 0.439 |
+| Logistic regression | class weights | 0.766 | 0.406 | 0.378 |
+| Decision tree | class weights | 0.754 | 0.354 | 0.415 |
+
+Class weights and SMOTE raise F1 at 0.5 but do not improve ranking (ROC-AUC, PR-AUC). The chosen
+model therefore uses no resampling and gets the same F1 gain from a tuned cut-off.
+
+**Why these metrics:** the bank calls a fixed number of customers, so ranking matters. Accuracy is
+not used, because an all-"no" model already scores 88%.
+
+---
+
+## CI/CD
+
+![CI/CD flow](docs/cicd-flow.png)
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| CI (`.github/workflows/ci-cd.yml`) | Every push and pull request | Lint, all tests with coverage, aws-tools tests, runtime image build (pushed to GHCR from `main`) |
+| Deploy to AWS (`.github/workflows/deploy.yml`) | Manual button, `main` only | Runs `scripts/deploy.sh`, or rolls back the champion |
+| SageMaker pipeline | `deploy.sh`, `--start` or the scheduler | Continuous training: train, check, register for approval |
+
+**Using the Deploy button:**
+
+1. The workflow must be on `main`; GitHub shows manual buttons only for workflows on the default branch.
+2. In **Settings > Secrets and variables > Actions**, add the repository secrets
+   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` with fresh lab keys.
+3. In **Actions > Deploy to AWS > Run workflow**, pick `deploy` or `rollback`.
+
+Lab keys expire after about 4 hours, so update the secrets before each use. A real AWS account would use GitHub OIDC instead of stored keys.
 
 ---
 
 ## Configuration
 
-### config.yaml
+`config.yaml` controls the split, excluded features, candidate models, imbalance strategies, tuning
+budget, cut-off metric, quality gates and MLflow settings.
 
-The main configuration file controls the data split, excluded features, candidate models, imbalance strategies, tuning budget, threshold metric, quality gates and MLflow settings:
-
-```yaml
-data:
-  raw_path: data/raw/bank-full.csv
-  separator: ";"
-  val_size: 0.15
-  test_size: 0.15
-  excluded_features: [duration]
-
-training:
-  cv_folds: 5
-  selection_metric: average_precision
-  candidate_models: [logistic_regression, decision_tree, random_forest, gradient_boosting]
-  imbalance_strategies: [none, class_weight, smote]
-  tuning_iterations: 20
-  threshold_metric: f1
-  quality_gates:
-    roc_auc: 0.75
-    lift_at_10: 2.5
-
-mlflow:
-  experiment_name: term_deposit_prediction
-  tracking_uri: sqlite:///mlflow.db
-```
-
-### Environment Variables (.env)
-
-All optional. `.env` is git- and docker-ignored; never commit it.
+Environment variables (all optional except the AWS keys for AWS commands; put them in `.env`):
 
 | Variable | Used by | Purpose |
 |---|---|---|
-| `LOG_LEVEL`, `LOG_FORMAT` | all entry points | Log detail; `text` or `json` |
-| `ALLOW_DIRTY` | training pipeline | `1` to train from uncommitted code as an experiment |
-| `MLFLOW_TRACKING_URI` | training pipeline | Overrides `mlflow.tracking_uri` in `config.yaml` |
-| `MODEL_DIR` | prediction service | Folder with `model.joblib` and `model_metadata.json` |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION` | aws-tools | Temporary AWS Academy keys (see docs/aws.md) |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION` | aws-tools, dashboard (AWS source) | Temporary AWS Academy keys |
 | `AWS_ROLE_ARN`, `AWS_BUCKET` | aws-tools | Override the default `LabRole` and SageMaker bucket |
+| `ALLOW_DIRTY` | training | `1` to train from uncommitted code |
+| `LOG_LEVEL`, `LOG_FORMAT` | all entry points | Log detail; `text` or `json` |
+| `MLFLOW_TRACKING_URI` | training | Overrides the MLflow store |
+| `MODEL_DIR` | API | Folder with `model.joblib` and `model_metadata.json` |
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-#### Issue 1: ModuleNotFoundError
-
-**Error:** `ModuleNotFoundError: No module named 'src'`
-
-**Solution:** Run from the project root as a module:
-```bash
-python -m src.pipelines.training_pipeline
-```
-
-#### Issue 2: MLflow File-Store Error
-
-**Error:** `The filesystem tracking backend (e.g., './mlruns') is in maintenance mode`
-
-**Solution:** MLflow 3 requires a database backend. The project uses `sqlite:///mlflow.db` (set in `config.yaml` and `.env`).
-
-#### Issue 3: Low F1 Score
-
-**Issue:** F1 score around 0.1 when cross-validating on the full file
-
-**Cause:** `bank-full.csv` is sorted by date, and unshuffled CV folds train on one period and test on another with a very different positive rate.
-
-**Solution:** Use shuffled `StratifiedKFold` (already done in `compare_models` / `hyperparameter_tuning`) and tune the decision threshold on validation data.
-
-#### Issue 4: Data Loading Error
-
-**Error:** CSV parsing errors
-
-**Solution:** Ensure the correct separator is specified in `config.yaml`. The bank dataset uses semicolon separator (`;`).
-
-#### Issue 5: Memory Issues
-
-**Issue:** Out of memory errors with large datasets
-
-**Solution:**
-- Use the smaller `bank.csv` (10% sample) for testing
-- Reduce model complexity (fewer trees, lower depth)
-- Process data in chunks
+| Problem | Fix |
+|---|---|
+| Training fails with `UncommittedCodeError` | Commit your changes, or add `-e ALLOW_DIRTY=1` for an experiment |
+| Dashboard: "No test split" | Train first: `docker compose run --rm train` |
+| Dashboard: "Local model is not answering" | Start the API: `docker compose up api` (or `docker compose up ui`, which starts both) |
+| Dashboard: "AWS model is not answering" | Run `aws-tools endpoint --up` and check the keys in `.env` |
+| `ExpiredToken` or `InvalidClientTokenId` | Lab keys expired: copy fresh ones from AWS Details into `.env` |
+| `Refusing to deploy: commit your changes first` | Commit first; every image is tagged with its commit |
+| Pipeline stops at **EnoughNewData** | Fewer than 1,000 new rows: `aws-tools replay --batches 3`, then start again |
+| Pipeline ends at **RejectChallenger** | The model failed a check; the reasons are in `runs/<execution id>/evaluation/evaluation.json` in S3 |
+| Endpoint: `AccessDenied` for the instance type | The lab denies `ml.t2.medium`; the default `ml.m5.large` works |
+| Code change not visible in the dashboard | Restart it: `docker compose restart ui` |
+| Tests outside Docker fail to import `src` | Run them in Docker: `docker compose run --rm test` |
 
 ---
 
-## Future Improvements
+## Future improvements
 
-### Model Improvements
-
-1. **Class Imbalance Handling**
-   - Try focal loss or probability calibration (Platt / isotonic) for better-calibrated scores
-   - Cost-sensitive threshold based on the actual cost of a call vs. the value of a deposit
-
-2. **Advanced Feature Engineering**
-   - Create domain-specific features (e.g., customer segmentation)
-   - Add temporal features from date columns
-   - Implement automated feature selection
-
-3. **Model Ensemble**
-   - Combine multiple models using voting or stacking
-   - Implement Bayesian optimization for hyperparameter tuning
-
-### Pipeline Improvements
-
-1. **Data Validation**
-   - Add data drift detection
-   - Implement data quality checks
-   - Add automated data profiling
-
-2. **Model Monitoring**
-   - Implement model performance monitoring
-   - Add alerting for model degradation
-   - Track prediction distribution over time
-
-3. **Deployment**
-   - Create REST API for model inference
-   - Implement batch prediction pipeline
-   - Add A/B testing framework
-
-### Infrastructure
-
-1. **CI/CD Pipeline**
-   - Automate testing with GitHub Actions
-   - Implement automated model training
-   - Add model versioning
-
-2. **Scalability**
-   - Implement distributed training
-   - Add support for streaming data
-   - Optimize for cloud deployment
+- **Time-aware training:** order splits by time inside each run too, and add features for the current period, so models keep up with the drift.
+- **Training from the Feature Store:** build each run's training set from the offline store with Athena.
+- **Calibration:** recalibrate probabilities on the newest batches.
+- **More data:** `bank-additional-full.csv` adds economic indicators (such as the Euribor rate) that explain much of the drift.
+- **Alerts:** run `drift-report` on a schedule and alert through CloudWatch when PSI exceeds 0.2.
+- **Secure CD:** GitHub OIDC roles instead of stored keys, and a staging endpoint before approval.
+- **Known issue:** the first run after an empty bucket holds out only the last 350-row batch, so it stops at EnoughNewData. It should hold out every batch after the history.
 
 ---
 
 ## References
 
-### Dataset Citation
-
-Moro, S., Rita, P., & Cortez, P. (2014). Bank Marketing [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5K306
-
-### Related Papers
-
-Moro, S., Cortez, P., & Rita, P. (2014). A Data-Driven Approach to Predict the Success of Bank Telemarketing. Decision Support Systems, 62, 22-31.
-
-### Useful Resources
-
-- [UCI Machine Learning Repository](https://archive.ics.uci.edu/)
-- [MLflow Documentation](https://mlflow.org/)
-- [Scikit-learn Documentation](https://scikit-learn.org/)
-- [Pandas Documentation](https://pandas.pydata.org/)
-
----
-
-## Contact
-
-**Group 5 Members:**
-- Dhrub Satyam
-- Anugrah Rastogi
-- Aishwarya Gulhane
-
-**Project:** AAI-540-Project-Group-5  
-**Repository:** https://github.com/anugrah-sandiego/AAI-540-Project-Group-5
-
----
-
-*Last Updated: October 6, 2026*
+- Moro, S., Rita, P., & Cortez, P. (2014). *Bank Marketing* [Dataset]. UCI Machine Learning Repository. https://doi.org/10.24432/C5K306
+- Moro, S., Cortez, P., & Rita, P. (2014). A Data-Driven Approach to Predict the Success of Bank Telemarketing. *Decision Support Systems*, 62, 22–31.
+- [MLflow](https://mlflow.org/) · [scikit-learn](https://scikit-learn.org/) · [Amazon SageMaker Pipelines](https://docs.aws.amazon.com/sagemaker/latest/dg/pipelines.html) · [Streamlit](https://streamlit.io/) · [FastAPI](https://fastapi.tiangolo.com/)
