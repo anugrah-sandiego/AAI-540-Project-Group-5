@@ -15,7 +15,8 @@ import httpx
 import pandas as pd
 import streamlit as st
 
-from src.ui.analysis import age_band, call_top, gains_by_decile, rank, roc_auc, segment_rates, time_periods
+from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, rank, roc_auc,
+                             segment_rates, time_periods)
 
 API_URL = os.getenv('API_URL', 'http://localhost:8080')
 TEST_DATA = Path(os.getenv('TEST_DATA', 'data/processed/test.parquet'))
@@ -134,6 +135,18 @@ with model_tab:
     with right:
         st.markdown('**Lift by tenth of the ranked list** (1.0 = random calling)')
         st.bar_chart(gains['lift'])
+    st.markdown('**Actual vs predicted**: real subscriber rate next to the average predicted probability')
+    st.caption('Predicted probabilities sit below the actual rates because the model learned from older months, '
+               'when far fewer customers subscribed. What matters for calling is the order: higher predictions '
+               'still mean more subscribers.')
+    left, right = st.columns(2)
+    with left:
+        st.markdown('**By contact month** (in date order)')
+        st.line_chart(actual_vs_predicted(scored, time_periods(scored['month'])))
+    with right:
+        st.markdown('**By tenth of the ranked list** (1 = highest predictions)')
+        ranked = rank(scored)
+        st.bar_chart(actual_vs_predicted(ranked, decile(ranked)), stack=False)
     st.markdown('**Recorded at training** (same test split)')
     st.dataframe(pd.Series(model['test_metrics'], name='value').round(3))
     with st.expander('Model lineage'):

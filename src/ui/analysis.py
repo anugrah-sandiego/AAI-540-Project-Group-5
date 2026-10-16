@@ -43,14 +43,23 @@ def call_top(scored: pd.DataFrame, top_percent: float) -> Dict[str, float]:
             'share_of_all_subscribers': called['y'].sum() / scored['y'].sum()}
 
 
+def decile(ranked: pd.DataFrame) -> pd.Series:
+    """Tenth of a ranked list each customer falls in: 1 = highest scores."""
+    return pd.Series(ranked.index * 10 // len(ranked) + 1, index=ranked.index, name='decile')
+
+
 def gains_by_decile(scored: pd.DataFrame) -> pd.DataFrame:
     """Conversion and lift per tenth of the ranked list, and the share of subscribers found so far."""
     ranked = rank(scored)
-    ranked['decile'] = (ranked.index * 10 // len(ranked)) + 1
-    table = ranked.groupby('decile')['y'].agg(customers='size', subscribers='sum', conversion='mean')
+    table = ranked['y'].groupby(decile(ranked)).agg(customers='size', subscribers='sum', conversion='mean')
     table['lift'] = table['conversion'] / scored['y'].mean()
     table['cumulative_share_of_subscribers'] = table['subscribers'].cumsum() / scored['y'].sum()
     return table
+
+
+def actual_vs_predicted(scored: pd.DataFrame, group: pd.Series) -> pd.DataFrame:
+    """Actual subscriber rate next to the average predicted probability, per group (in group order)."""
+    return scored.groupby(group, sort=False).agg(actual=('y', 'mean'), predicted=('probability', 'mean'))
 
 
 def time_periods(month: pd.Series) -> pd.Series:

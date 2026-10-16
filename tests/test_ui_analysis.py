@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 from sklearn.metrics import roc_auc_score
 
-from src.ui.analysis import age_band, call_top, gains_by_decile, roc_auc, segment_rates, time_periods
+from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, gains_by_decile, rank, roc_auc,
+                             segment_rates, time_periods)
 
 
 def scored_customers(n=100, seed=0):
@@ -36,6 +37,14 @@ def test_gains_cover_every_customer_and_end_with_all_subscribers():
     assert list(gains.index) == list(range(1, 11)) and gains['customers'].sum() == 100
     assert gains['cumulative_share_of_subscribers'].iloc[-1] == pytest.approx(1.0)
     assert gains['lift'].iloc[0] >= gains['lift'].iloc[-1]
+
+
+def test_actual_vs_predicted_per_tenth_of_the_ranked_list():
+    ranked = rank(scored_customers())
+    table = actual_vs_predicted(ranked, decile(ranked))
+    assert list(table.index) == list(range(1, 11)) and list(table.columns) == ['actual', 'predicted']
+    assert table['predicted'].is_monotonic_decreasing
+    assert (table['actual'] * 10).sum() == pytest.approx(ranked['y'].sum())  # 10 customers per tenth
 
 
 def test_time_periods_keep_repeated_months_apart():
