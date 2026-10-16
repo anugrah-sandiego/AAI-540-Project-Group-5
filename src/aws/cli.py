@@ -205,7 +205,7 @@ def main() -> None:
     replay_args.add_argument('--initial-rows', type=int, default=31500)
     replay_args.add_argument('--batch-rows', type=int, default=350)
     deploy_args = commands.add_parser('deploy-pipeline')
-    deploy_args.add_argument('--image-tag', required=True, help='tag printed by scripts/push_image.sh')
+    deploy_args.add_argument('--image-tag', required=True, help='image tag in ECR (scripts/deploy.sh uses the commit)')
     deploy_args.add_argument('--start', action='store_true')
     deploy_args.add_argument('--quick', action='store_true', help='with --start: random forest only, short search')
     commands.add_parser('approve')

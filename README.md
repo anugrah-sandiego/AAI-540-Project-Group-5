@@ -199,7 +199,7 @@ AAI-540-Project-Group-5/
 │       ├── pipeline.py, cli.py, config.py, registry.py
 │       └── steps/                         # prepare, train, evaluate
 ├── docker/                                # train / serve launch scripts for SageMaker
-├── scripts/push_image.sh                  # Push the runtime image to ECR
+├── scripts/deploy.sh                      # Push this commit's image to ECR and start the pipeline
 ├── docs/aws.md                            # AWS architecture and lab runbook
 ├── models/                                # model.joblib + model_metadata.json (generated)
 ├── tests/                                 # pytest suite; tests/aws needs the SageMaker SDK
@@ -420,8 +420,7 @@ lab runbook are in [docs/aws.md](docs/aws.md).
 - **CI** (`.github/workflows/ci-cd.yml`): lint, tests and an image build on every push; GitHub holds no AWS keys.
 
 ```bash
-scripts/push_image.sh
-docker compose run --rm aws-tools deploy-pipeline --image-tag <tag> --start
+scripts/deploy.sh
 ```
 
 ---

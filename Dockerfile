@@ -96,7 +96,7 @@ LABEL org.opencontainers.image.revision=${GIT_COMMIT} \
       org.opencontainers.image.source="https://github.com/anugrah-sandiego/AAI-540-Project-Group-5"
 
 # SageMaker mounts /opt/ml owned by root, so images pushed for SageMaker are built
-# with RUN_AS=root (scripts/push_image.sh); local and production runs stay unprivileged
+# with RUN_AS=root (scripts/deploy.sh); local and production runs stay unprivileged
 ARG RUN_AS=appuser
 USER ${RUN_AS}
 

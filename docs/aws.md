@@ -7,7 +7,7 @@ cloud trains and serves exactly the code and package versions tested locally.
 ```
 laptop (Docker, .env keys)            AWS (runs as LabRole)
 --------------------------            ---------------------------------------------------------
-scripts/push_image.sh  ------------>  ECR: aai540-bank-marketing:<commit>
+scripts/deploy.sh      ------------>  ECR: aai540-bank-marketing:<commit>
 aws-tools replay       ------------>  S3 raw/ batches
 aws-tools deploy-pipeline  -------->  SageMaker Pipeline "bank-marketing-retrain"
 aws-tools schedule     ------------>  EventBridge Scheduler  ->  pipeline run:
@@ -45,7 +45,7 @@ aws-tools smoke-test  ------------>  serverless endpoint (created, called, delet
 
 1. **PrepareData** rebuilds the dataset from all accepted batches (idempotent). Batches seen before are training data; batches new in this run are evaluation data.
 2. **EnoughNewData**: skips training when the new batches have fewer than `MinNewRows` (300) rows.
-3. **TrainChallenger** runs the training pipeline. By default it runs the full 12-model comparison; `QuickTraining=true` (or `deploy-pipeline --start --quick`) reuses random forest with a short search for cheaper test runs.
+3. **TrainChallenger** runs the training pipeline. It trains the candidates in `config.yaml` (logistic regression) with a time-ordered split; `QuickTraining=true` (`scripts/deploy.sh --quick`) uses a shorter search for cheaper test runs. Training does not apply the quality gates itself, so a weak model reaches EvaluateChallenger and is rejected with reasons.
 4. **EvaluateChallenger** scores the challenger and the champion on the new data neither has seen. It passes when the quality gates in `config.yaml` hold, PR-AUC is no more than 0.01 below the champion's, and recall in every age band is at least 80% of overall recall.
 5. **GatesPassed** registers the challenger as *pending approval*, or fails the run with the reasons in `evaluation.json`.
 
@@ -63,9 +63,8 @@ AWS_REGION=us-east-1
 
 ```bash
 docker compose run --rm aws-tools check                      # identity; can the scheduler use LabRole?
-scripts/push_image.sh                                        # prints the image tag
 docker compose run --rm aws-tools replay --batches 2         # history + one day
-docker compose run --rm aws-tools deploy-pipeline --image-tag <tag> --start
+scripts/deploy.sh                                            # push this commit's image, update and start the pipeline
 # watch the run in SageMaker Studio > Pipelines (about 15-25 minutes)
 docker compose run --rm aws-tools approve                    # newest pending -> champion
 docker compose run --rm aws-tools smoke-test                 # serverless endpoint, deleted afterwards
@@ -85,4 +84,4 @@ jobs for minutes); nothing is left running.
 - Keys expire about every 4 hours; only aws-tools uses them. Scheduled runs use `LabRole`.
 - If `check` reports that the scheduler cannot use `LabRole`, start runs with `deploy-pipeline --start` instead.
 - The lab account closes at the end of the course, so schedules stop then.
-- GitHub Actions has no AWS access; CI tests and builds, and the image is pushed with `scripts/push_image.sh`.
+- GitHub Actions has no AWS access; CI tests and builds, and `scripts/deploy.sh` pushes the image and starts the pipeline.

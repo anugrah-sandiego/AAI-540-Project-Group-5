@@ -23,9 +23,9 @@ from src.utils.logging_config import setup_logging
 
 ML_ROOT = Path('/opt/ml')
 
-# Runs compare all models by default; setting the `quick` hyperparameter to true
-# reuses the known-good model family with a short search (cheaper test runs)
-QUICK_TRAINING = {'candidate_models': ['random_forest'], 'imbalance_strategies': ['none'],
+# Runs use the candidates in config.yaml; setting the `quick` hyperparameter to
+# true runs one candidate with a short search (cheaper test runs)
+QUICK_TRAINING = {'candidate_models': ['logistic_regression'], 'imbalance_strategies': ['none'],
                   'tuning_iterations': 5, 'cv_folds': 3}
 
 
@@ -36,6 +36,9 @@ def training_config(base: dict, quick: bool, ml_root: Path = ML_ROOT) -> dict:
     config['model']['output_dir'] = str(ml_root / 'model')
     config['data']['processed_path'] = str(output / 'processed')
     config['mlflow']['tracking_uri'] = f"sqlite:///{output / 'mlflow.db'}"
+    # EvaluateChallenger applies the quality gates, so a weak model ends the run as
+    # RejectChallenger with its reasons instead of failing inside training
+    config['training']['quality_gates'] = {}
     if quick:
         config['training'].update(QUICK_TRAINING)
     return config

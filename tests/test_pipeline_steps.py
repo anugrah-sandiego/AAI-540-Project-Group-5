@@ -79,8 +79,16 @@ def test_training_config_targets_sagemaker_directories(tmp_path):
     assert config['model']['output_dir'] == str(tmp_path / 'model')
     assert config['mlflow']['tracking_uri'] == f"sqlite:///{tmp_path / 'output' / 'data' / 'mlflow.db'}"
     assert {key: config['training'][key] for key in QUICK_TRAINING} == QUICK_TRAINING
-    full = training_config(load_config('config.yaml'), quick=False, ml_root=tmp_path)
-    assert len(full['training']['candidate_models']) == 4
+    base = load_config('config.yaml')
+    full = training_config(base, quick=False, ml_root=tmp_path)
+    assert full['training']['candidate_models'] == base['training']['candidate_models']
+
+
+def test_training_leaves_the_quality_gates_to_the_evaluate_step(tmp_path):
+    base = load_config('config.yaml')
+    assert training_config(base, quick=False, ml_root=tmp_path)['training']['quality_gates'] == {}
+    # The evaluate step still reads the gates from the unchanged config
+    assert base['training']['quality_gates']
 
 
 # --- evaluate -----------------------------------------------------------------
