@@ -100,7 +100,7 @@ except (httpx.HTTPError, BotoCoreError, ClientError) as exc:
 test = load_test()
 st.caption(f"{source} · {model['model_type']} · trained {model['trained_at'][:16]} · commit {model['commit'][:7]} · "
            f"cut-off {model['decision_threshold']:.3f} · all figures use the held-out test split "
-           f"({len(test):,} newest customers, never used for training)")
+           f"({len(test):,} customers held out from training)")
 
 call_tab, data_tab, model_tab = st.tabs(['Who to call', 'Test data analytics', 'Model performance'])
 

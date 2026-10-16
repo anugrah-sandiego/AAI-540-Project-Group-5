@@ -429,7 +429,7 @@ scripts/deploy.sh
 
 ## Dashboard
 
-A Streamlit dashboard (`src/ui/app.py`) built on the **held-out test split only** (the newest 6,782 customers in `data/processed/test.parquet`, written by training). It gets every score from the prediction API and never loads the model itself.
+A Streamlit dashboard (`src/ui/app.py`) built on the **held-out test split only** (6,782 customers held out from training in `data/processed/test.parquet`). It gets every score from the prediction API and never loads the model itself.
 
 ```bash
 docker compose run --rm train     # once, to create the model and the test split
