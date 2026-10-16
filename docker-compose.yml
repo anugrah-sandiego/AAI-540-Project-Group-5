@@ -10,6 +10,7 @@
 #   docker compose up mlflow                              # MLflow UI on http://localhost:5000
 #   docker compose run --rm shell                         # interactive shell
 #   docker compose up api                                 # predictions on http://localhost:8080
+#   docker compose up ui                                  # dashboard on http://localhost:8501 (starts api too)
 #   docker compose run --rm aws-tools --help              # AWS commands (lab keys from .env)
 #   docker compose run --rm aws-test                      # tests that need the SageMaker SDK
 #
@@ -58,6 +59,25 @@ services:
       MODEL_DIR: models
     ports:
       - "8080:8080"
+
+  # Dashboard on the held-out test split; every score comes from the api service
+  ui:
+    build:
+      context: .
+      target: ui
+    image: aai540-bank-marketing:ui
+    volumes:
+      - ./src:/app/src:ro
+      - ./data/processed:/app/data/processed:ro
+    working_dir: /app
+    environment:
+      API_URL: http://api:8080
+      PYTHONPATH: /app
+    command: streamlit run src/ui/app.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
 
   aws-tools: &aws
     build:

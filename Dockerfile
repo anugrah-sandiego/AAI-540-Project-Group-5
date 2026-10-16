@@ -4,6 +4,7 @@
 #             run time (see docker-compose.yml), so code changes need no rebuild
 #   aws     - aws-tools: the SageMaker SDK, kept apart because it needs older
 #             package versions than the training code
+#   ui      - Streamlit dashboard; calls the prediction API, so no ML libraries
 #   runtime - production image for local runs and SageMaker (train/serve); built
 #             by default (docker build .) because it is the last stage
 
@@ -67,6 +68,18 @@ ENV PYTHONUNBUFFERED=1 \
 # Code is mounted at run time (see the aws-tools service in docker-compose.yml)
 COPY requirements-aws.txt ./
 RUN pip install -r requirements-aws.txt && useradd --create-home --uid 1000 appuser
+USER appuser
+
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS ui
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1     PYTHONDONTWRITEBYTECODE=1     PIP_NO_CACHE_DIR=1     PIP_DISABLE_PIP_VERSION_CHECK=1     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+
+# Dashboard only: scores come from the API, so no ML libraries are installed.
+# Code and the test split are mounted at run time (see the ui service in docker-compose.yml)
+COPY requirements-ui.txt constraints.txt ./
+RUN pip install -r requirements-ui.txt -c constraints.txt && useradd --create-home --uid 1000 appuser
 USER appuser
 
 # ---------------------------------------------------------------------------

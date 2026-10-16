@@ -3,8 +3,9 @@ Prediction service for the trained term deposit model.
 
 Serves the SageMaker inference contract (GET /ping, POST /invocations on port
 8080) and the same predictions on POST /predict for local clients such as the
-Streamlit UI. The model and its metadata are read once from MODEL_DIR: the
-SageMaker model directory by default, or a folder filled by `aws-tools pull-model`.
+Streamlit dashboard, which also reads GET /model to show which model answers.
+The model and its metadata are read once from MODEL_DIR: the SageMaker model
+directory by default, or a folder filled by `aws-tools pull-model`.
 """
 
 import json
@@ -77,6 +78,20 @@ def ping() -> Response:
     except (OSError, KeyError, ValueError):
         return Response(status_code=503)
     return Response(status_code=200)
+
+
+@app.get('/model')
+def model_info() -> Dict[str, Any]:
+    """Describe the served model: how it was trained, its held-out test metrics and lineage."""
+    metadata = get_predictor().metadata
+    lineage = metadata['lineage']
+    return {**get_predictor().version,
+            'model_type': metadata.get('model_type'),
+            'split_strategy': metadata.get('split_strategy'),
+            'refit_on_all_data': metadata.get('refit_on_all_data', False),
+            'test_metrics': metadata.get('test_metrics', {}),
+            'branch': lineage['git'].get('branch'),
+            'data_sha256': lineage.get('data', {}).get('sha256')}
 
 
 @app.post('/invocations')

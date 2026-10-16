@@ -199,6 +199,7 @@ AAI-540-Project-Group-5/
 │       ├── pipeline.py, cli.py, config.py, registry.py
 │       └── steps/                         # prepare, train, evaluate
 ├── docker/                                # train / serve launch scripts for SageMaker
+├── src/ui/                               # Streamlit dashboard (app.py) and its calculations (analysis.py)
 ├── scripts/deploy.sh                      # Push this commit's image to ECR and start the pipeline
 ├── docs/aws.md                            # AWS architecture and lab runbook
 ├── models/                                # model.joblib + model_metadata.json (generated)
@@ -444,6 +445,26 @@ lab runbook are in [docs/aws.md](docs/aws.md).
 ```bash
 scripts/deploy.sh
 ```
+
+---
+
+## Dashboard
+
+A Streamlit dashboard (`src/ui/app.py`) built on the **held-out test split only** (the newest 6,782 customers in `data/processed/test.parquet`, written by training). It gets every score from the prediction API and never loads the model itself.
+
+```bash
+docker compose run --rm train     # once, to create the model and the test split
+docker compose up ui              # starts the API too; open http://localhost:8501
+```
+
+| Tab | Shows |
+|---|---|
+| Predict a customer | Probability, call / don't call at the model cut-off, and where the customer would rank among test customers |
+| Who to call | Test customers ranked by the API; a "call the top X%" slider with subscribers reached vs random calling; CSV download |
+| Test data analytics | Subscriber rate by contact month and by segment (previous outcome, housing loan, contact type, age band, job); share of unknown values |
+| Model performance | ROC-AUC, lift and gains by tenth of the ranked list (computed live from the API's scores), metrics recorded at training, model lineage |
+
+The API (`src/serving/app.py`) answers `GET /ping`, `POST /predict` (same as SageMaker's `/invocations`) and `GET /model` (which model is serving: type, cut-off, test metrics, commit, data hash).
 
 ---
 

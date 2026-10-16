@@ -49,6 +49,12 @@ def test_predictions_carry_probability_decision_and_model_version(client, path):
         assert prediction['subscribe'] == (prediction['probability'] >= 0.5)
 
 
+def test_model_endpoint_describes_the_served_model(client):
+    body = client.get('/model').json()
+    assert body['run_id'] == 'run-0' and body['commit'] == 'abc1234' and body['decision_threshold'] == 0.5
+    assert {'model_type', 'split_strategy', 'refit_on_all_data', 'test_metrics', 'data_sha256'} <= set(body)
+
+
 def test_missing_columns_are_rejected_by_name(client):
     record = records(1)[0]
     del record['age'], record['job']

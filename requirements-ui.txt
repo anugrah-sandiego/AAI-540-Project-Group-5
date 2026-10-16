@@ -1,0 +1,7 @@
+# ui image (Dockerfile `ui` stage): the Streamlit dashboard. It gets every score
+# from the prediction API, so it needs no ML libraries. Shared packages are pinned
+# by constraints.txt.
+streamlit==1.64.0
+httpx
+pandas
+pyarrow
