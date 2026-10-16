@@ -20,6 +20,10 @@ models/
 data/processed/
 *.log
 
+# Dashboard: runs in its own ui container with src/ mounted at run time, so the
+# model image pushed to ECR and run by SageMaker does not carry it
+src/ui/
+
 # Python / tooling caches
 **/__pycache__/
 *.py[cod]
