@@ -1,17 +1,24 @@
 """
 Streamlit dashboard for the term deposit model, built on the held-out test split only.
 
-Every score comes from the prediction API (API_URL); the dashboard never loads the
-model. The test split is the newest 15% of customers, written to
+Scores come from one of two sources, chosen in the sidebar; the dashboard never
+loads a model itself:
+  - Local model (open-source stack): the FastAPI service (API_URL) serving models/
+  - AWS model: the approved champion on the SageMaker endpoint (SAGEMAKER_ENDPOINT),
+    called with the lab keys from .env while `aws-tools endpoint --up` is running
+Both answer the same JSON contract. The test split is written to
 data/processed/test.parquet by the training pipeline.
 
     docker compose up ui      # also starts the API; open http://localhost:8501
 """
 
+import json
 import os
 from pathlib import Path
 
+import boto3
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 import pandas as pd
 import streamlit as st
 
@@ -19,6 +26,8 @@ from src.ui.analysis import (actual_vs_predicted, age_band, call_top, decile, ga
                              month_of_year, rank, roc_auc, segment_rates)
 
 API_URL = os.getenv('API_URL', 'http://localhost:8080')
+SAGEMAKER_ENDPOINT = os.getenv('SAGEMAKER_ENDPOINT', 'bank-marketing-live')
+LOCAL, AWS = 'Local model (open-source stack)', 'AWS model (SageMaker endpoint)'
 TEST_DATA = Path(os.getenv('TEST_DATA', 'data/processed/test.parquet'))
 NUMERIC = ['age', 'balance', 'day', 'campaign', 'pdays', 'previous']
 CATEGORICAL = ['job', 'marital', 'education', 'default', 'housing', 'loan', 'contact', 'month', 'poutcome']
@@ -34,24 +43,35 @@ def load_test() -> pd.DataFrame:
     return pd.read_parquet(TEST_DATA)
 
 
+def predict(records: list, source: str) -> dict:
+    """Predictions and the answering model's version, from the local API or the SageMaker endpoint."""
+    body = {'instances': records}
+    if source == AWS:
+        runtime = boto3.client('sagemaker-runtime', region_name=os.getenv('AWS_REGION', 'us-east-1'))
+        response = runtime.invoke_endpoint(EndpointName=SAGEMAKER_ENDPOINT, ContentType='application/json',
+                                           Body=json.dumps(body))
+        return json.loads(response['Body'].read())
+    response = httpx.post(f'{API_URL}/predict', json=body, timeout=120)
+    response.raise_for_status()
+    return response.json()
+
+
 @st.cache_data(ttl=60)
-def model_info() -> dict:
+def model_info(source: str) -> dict:
+    """Which model answers. The endpoint exposes only /invocations, so its version comes with a prediction."""
+    if source == AWS:
+        sample = load_test().drop(columns='y').head(1).to_dict(orient='records')
+        return {'model_type': 'approved champion', **predict(sample, source)['model']}
     response = httpx.get(f'{API_URL}/model', timeout=10)
     response.raise_for_status()
     return response.json()
 
 
-def predict(records: list) -> list:
-    response = httpx.post(f'{API_URL}/predict', json={'instances': records}, timeout=120)
-    response.raise_for_status()
-    return response.json()['predictions']
-
-
 @st.cache_data
-def score_test(run_id: str) -> pd.DataFrame:
-    """Score every test customer once per served model (the run id keys the cache)."""
+def score_test(source: str, run_id: str) -> pd.DataFrame:
+    """Score every test customer once per source and model (they key the cache)."""
     test = load_test()
-    predictions = predict(test.drop(columns='y').to_dict(orient='records'))
+    predictions = predict(test.drop(columns='y').to_dict(orient='records'), source)['predictions']
     # The data is anonymised (no names or phone numbers), so customers are identified
     # by their position in the test split; a bank would join this ID to its CRM
     return test.assign(customer_id=[f'TEST-{i:05d}' for i in range(1, len(test) + 1)],
@@ -64,15 +84,21 @@ st.title('Term deposit model: who to call')
 if not TEST_DATA.exists():
     st.error(f'No test split at {TEST_DATA}. Run training first: docker compose run --rm train')
     st.stop()
+source = st.sidebar.radio('Model outputs from', [LOCAL, AWS])
+st.sidebar.caption('Local: open-source stack (FastAPI, scikit-learn, MLflow) on this machine, free. '
+                   'AWS: the approved champion on the SageMaker endpoint; needs `aws-tools endpoint --up` '
+                   'and lab keys in .env, and bills while the endpoint runs.')
 try:
-    model = model_info()
-    scored = score_test(model['run_id'])
-except httpx.HTTPError as exc:
-    st.error(f'The prediction API at {API_URL} is not answering ({exc}). Start it: docker compose up api')
+    model = model_info(source)
+    scored = score_test(source, model['run_id'])
+except (httpx.HTTPError, BotoCoreError, ClientError) as exc:
+    hint = ('Start it with `docker compose run --rm aws-tools endpoint --up` and check the keys in .env.'
+            if source == AWS else 'Start it with `docker compose up api`.')
+    st.error(f'{source} is not answering ({exc}). {hint}')
     st.stop()
 
 test = load_test()
-st.caption(f"Model: {model['model_type']} · trained {model['trained_at'][:16]} · commit {model['commit'][:7]} · "
+st.caption(f"{source} · {model['model_type']} · trained {model['trained_at'][:16]} · commit {model['commit'][:7]} · "
            f"cut-off {model['decision_threshold']:.3f} · all figures use the held-out test split "
            f"({len(test):,} newest customers, never used for training)")
 
@@ -121,8 +147,8 @@ with call_tab:
             checked = st.form_submit_button('Check')
         if checked:
             try:
-                probability = predict([customer])[0]['probability']
-            except httpx.HTTPError as exc:
+                probability = predict([customer], source)['predictions'][0]['probability']
+            except (httpx.HTTPError, BotoCoreError, ClientError) as exc:
                 st.error(f'Prediction failed: {exc}')
             else:
                 position = position_among(probability, scored)
@@ -183,7 +209,8 @@ with model_tab:
         st.markdown('**By tenth of the ranked list** (1 = highest predictions)')
         ranked = rank(scored)
         st.bar_chart(actual_vs_predicted(ranked, decile(ranked)), stack=False)
-    st.markdown('**Recorded at training** (same test split)')
-    st.dataframe(pd.Series(model['test_metrics'], name='value').round(3))
+    if model.get('test_metrics'):
+        st.markdown('**Recorded at training** (same test split)')
+        st.dataframe(pd.Series(model['test_metrics'], name='value').round(3))
     with st.expander('Model lineage'):
         st.json(model)

@@ -70,6 +70,10 @@ services:
       - ./src:/app/src:ro
       - ./data/processed:/app/data/processed:ro
     working_dir: /app
+    # Lab keys, only used when the dashboard's source is the AWS model (SageMaker endpoint)
+    env_file:
+      - path: .env
+        required: false
     environment:
       API_URL: http://api:8080
       PYTHONPATH: /app

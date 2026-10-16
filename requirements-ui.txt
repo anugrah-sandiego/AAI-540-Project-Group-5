@@ -3,5 +3,7 @@
 # by constraints.txt.
 streamlit==1.64.0
 httpx
+# Calls the SageMaker endpoint when the dashboard's source is the AWS model
+boto3
 pandas
 pyarrow
