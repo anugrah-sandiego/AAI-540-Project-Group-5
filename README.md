@@ -27,10 +27,11 @@ The same code runs in two places:
 5. [Data](#data)
 6. [Model and results](#model-and-results)
 7. [CI/CD](#cicd)
-8. [Configuration](#configuration)
-9. [Troubleshooting](#troubleshooting)
-10. [Future improvements](#future-improvements)
-11. [References](#references)
+8. [Logging](#logging)
+9. [Configuration](#configuration)
+10. [Troubleshooting](#troubleshooting)
+11. [Future improvements](#future-improvements)
+12. [References](#references)
 
 ---
 
@@ -370,6 +371,65 @@ not used, because an all-"no" model already scores 88%.
 3. In **Actions > Deploy to AWS > Run workflow**, pick `deploy` or `rollback`.
 
 Lab keys expire after about 4 hours, so update the secrets before each use. A real AWS account would use GitHub OIDC instead of stored keys.
+
+---
+
+## Logging
+
+All the code logs the same way (`src/utils/logging_config.py`). Each module writes through
+`logging.getLogger(__name__)`, and each entry point calls `setup_logging()` once. Logs go to
+**stdout**, so Docker shows them in your terminal and SageMaker sends them to CloudWatch, with no
+log files to manage. Each pipeline stage logs its start, its duration and any failure:
+
+```
+2026-10-12 09:30:10,631 INFO     __main__: Starting: compare models and imbalance strategies (CV on train)
+2026-10-12 09:30:38,972 INFO     src.models.train_model: [7/12] random_forest        none          AUC=0.7904  PR-AUC=0.4449
+2026-10-12 09:39:12,475 INFO     __main__: Quality gates passed: {'roc_auc': 0.75, 'lift_at_10': 2.5}
+```
+
+Two environment variables control the output, locally or in `.env`:
+
+| Variable | Values | Effect |
+|---|---|---|
+| `LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING`, `ERROR` | How much detail is shown |
+| `LOG_FORMAT` | `text` (default), `json` | `json` writes one JSON object per line, for CloudWatch Logs Insights or other log tools |
+
+### Local logs
+
+| What | Where to look |
+|---|---|
+| Training, tests, aws-tools | Printed in the terminal while the command runs |
+| Save a run to a file | `docker compose run --rm train > train.log 2>&1` (`*.log` files are git-ignored) |
+| More detail | `docker compose run --rm -e LOG_LEVEL=DEBUG train` |
+| API and dashboard | `docker compose logs -f api` or `docker compose logs -f ui` |
+| Every training run's parameters, metrics and model | MLflow: `docker compose up mlflow`, then open http://localhost:5000 |
+
+### AWS logs
+
+Every SageMaker job runs the same code, so its log lines look the same as locally. They are stored
+in **CloudWatch Logs**, one stream per job:
+
+| What | CloudWatch log group |
+|---|---|
+| PrepareData, EvaluateChallenger (Processing jobs) | `/aws/sagemaker/ProcessingJobs` |
+| TrainChallenger, `train-sklearn` (Training jobs) | `/aws/sagemaker/TrainingJobs` |
+| Batch Transform (`batch-score`) | `/aws/sagemaker/TransformJobs` |
+| Real-time endpoint | `/aws/sagemaker/Endpoints/bank-marketing-live` |
+
+To read a pipeline run's logs:
+
+1. Open **SageMaker Studio > Pipelines > bank-marketing-retrain** and choose the execution.
+2. Click a step (for example **EvaluateChallenger**). The **Logs** tab shows that job's output, and
+   the job name links to its CloudWatch stream.
+3. Alternatively, open **CloudWatch > Log groups**, pick the group above, and open the newest stream.
+   Stream names start with the job name.
+
+Each run also saves its results in S3 under `runs/<execution id>/`: `report/report.json` (rows, batches,
+quarantined batches) and `evaluation/evaluation.json` (every check's value and the reasons for a rejection).
+
+AWS Academy keys cannot read CloudWatch Logs or list SageMaker jobs from the command line, so read
+the logs in the AWS console. The lab must be running, and logs from earlier sessions stay there until
+the log groups are deleted.
 
 ---
 
