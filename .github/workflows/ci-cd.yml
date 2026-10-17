@@ -139,7 +139,7 @@ jobs:
     name: Rollback on Failure
     runs-on: ubuntu-latest
     needs: deploy
-    if: false()
+    if: false
 
     steps:
     - name: Checkout code
