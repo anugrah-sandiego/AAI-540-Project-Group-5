@@ -4,6 +4,7 @@ SageMaker batch transform job implementation for batch inference.
 
 import os
 import boto3
+import time
 import sagemaker
 from sagemaker.sklearn.model import SKLearnModel
 from sagemaker.transformer import Transformer
