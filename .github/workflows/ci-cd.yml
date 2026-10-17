@@ -1,20 +1,26 @@
 name: Group 5 CI and SageMaker release
+
 on:
   push:
     branches: [main, develop]
+
   pull_request:
     branches: [main]
+
   workflow_dispatch:
     inputs:
       release:
-        description: 'Train and release on AWS (creates billable resources)'
+        description: 'Run AWS training and deployment'
         type: boolean
         default: false
+
 permissions:
   contents: read
+
 concurrency:
   group: group5-${{ github.ref }}
   cancel-in-progress: false
+
 env:
   AWS_REGION: us-east-1
   AWS_BUCKET: sagemaker-us-east-1-562792440372
@@ -25,186 +31,301 @@ env:
   BASE_TRAINING_JOB_NAME: bank-marketing-training-20261011-095612
   MIN_ROC_AUC: '0.75'
   MIN_LIFT_AT_10: '2.5'
+
 jobs:
   checks:
+    name: Code checks and tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pip
           cache-dependency-path: cicd/requirements-ci.txt
-      - run: python -m pip install -r cicd/requirements-ci.txt
-      - run: python -m pip check
-      - run: ruff check src cicd --select E9,F63,F7,F82
-      - run: python -m pytest tests -v --junitxml=artifacts/tests.xml --cov=src --cov=cicd --cov-report=xml:artifacts/coverage.xml
+
+      - name: Install dependencies
+        run: python -m pip install -r cicd/requirements-ci.txt
+
+      - name: Check dependency compatibility
+        run: python -m pip check
+
+      - name: Check fatal lint errors
+        run: ruff check src cicd --select E9,F63,F7,F82
+
+      - name: Run unit and mocked integration tests
         env:
           AWS_EC2_METADATA_DISABLED: 'true'
-      - uses: actions/upload-artifact@v4
+        run: |
+          python -m pytest tests -v \
+            --junitxml=artifacts/tests.xml \
+            --cov=src \
+            --cov=cicd \
+            --cov-report=xml:artifacts/coverage.xml
+
+      - name: Save test reports
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
           path: artifacts/
           if-no-files-found: ignore
+
   train:
+    name: Prepare data and train on AWS
     needs: checks
-    if: github.event_name == 'workflow_dispatch' && inputs.release && github.ref == 'refs/heads/main'
+
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.release))
+
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: lab
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pip
           cache-dependency-path: cicd/requirements-ci.txt
-      - run: python -m pip install -r cicd/requirements-ci.txt
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Install dependencies
+        run: python -m pip install -r cicd/requirements-ci.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: '562792440372'
-      - name: Prepare
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Check required AWS resources
+        run: |
+          aws s3api head-object \
+            --bucket "$AWS_BUCKET" \
+            --key aai540/bank-marketing/raw/bank-full.csv
+
+          aws sagemaker describe-training-job \
+            --training-job-name "$BASE_TRAINING_JOB_NAME" \
+            --query '{Status:TrainingJobStatus,Image:AlgorithmSpecification.TrainingImage}' \
+            --output table
+
+          aws sagemaker list-model-package-groups \
+            --max-results 1 \
+            --output table
+
+      - name: Prepare S3 training inputs
         run: python -m cicd.release prepare
-      - name: Train
+
+      - name: Run SageMaker training
         run: python -m cicd.release train
-      - uses: actions/upload-artifact@v4
+
+      - name: Save training state
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: state-train
           path: artifacts/release.json
           if-no-files-found: ignore
+
   evaluate:
+    name: Evaluate model quality
     needs: train
-    if: success()
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
     environment: lab
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pip
           cache-dependency-path: cicd/requirements-ci.txt
-      - run: python -m pip install -r cicd/requirements-ci.txt
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Install dependencies
+        run: python -m pip install -r cicd/requirements-ci.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: '562792440372'
-      - uses: actions/download-artifact@v4
+
+      - name: Download training state
+        uses: actions/download-artifact@v4
         with:
           name: state-train
           path: artifacts
-      - name: Evaluate
+
+      - name: Evaluate and enforce quality gates
         run: python -m cicd.release evaluate
-      - uses: actions/upload-artifact@v4
+
+      - name: Save evaluation state
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: state-evaluate
           path: artifacts/release.json
           if-no-files-found: ignore
+
   register:
+    name: Register evaluated model
     needs: evaluate
-    if: success()
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 30
     environment: lab
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pip
           cache-dependency-path: cicd/requirements-ci.txt
-      - run: python -m pip install -r cicd/requirements-ci.txt
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Install dependencies
+        run: python -m pip install -r cicd/requirements-ci.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: '562792440372'
-      - uses: actions/download-artifact@v4
+
+      - name: Download evaluation state
+        uses: actions/download-artifact@v4
         with:
           name: state-evaluate
           path: artifacts
-      - name: Register
+
+      - name: Register model pending approval
         run: python -m cicd.release register
-      - uses: actions/upload-artifact@v4
+
+      - name: Save registration state
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: state-register
           path: artifacts/release.json
           if-no-files-found: ignore
+
   deploy:
+    name: Approve, test staging, and deploy production
     needs: register
-    if: success()
     runs-on: ubuntu-latest
     timeout-minutes: 180
     environment: production
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
           cache: pip
           cache-dependency-path: cicd/requirements-ci.txt
-      - run: python -m pip install -r cicd/requirements-ci.txt
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Install dependencies
+        run: python -m pip install -r cicd/requirements-ci.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
           allowed-account-ids: '562792440372'
-      - uses: actions/download-artifact@v4
+
+      - name: Download registration state
+        uses: actions/download-artifact@v4
         with:
           name: state-register
           path: artifacts
-      - name: Approve
+
+      - name: Approve registered model
         run: python -m cicd.release approve
-      - name: Staging
+
+      - name: Deploy staging and validate predictions
         run: python -m cicd.release staging
-      - name: Promote
+
+      - name: Promote to production with recovery handling
         run: python -m cicd.release promote
+
       - name: Always clean staging resources
         if: always()
         run: |
           if [ -f artifacts/release.json ]; then
             python -m cicd.release cleanup
           fi
-      - uses: actions/upload-artifact@v4
+
+      - name: Save deployment state
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: state-deploy
           path: artifacts/release.json
           if-no-files-found: ignore
+
   outcome:
+    name: Report pipeline outcome
     needs: [checks, train, evaluate, register, deploy]
     if: always()
     runs-on: ubuntu-latest
+
     steps:
-      - name: Report real job results
+      - name: Report actual job results
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: |
           python - <<'PY'
-          import json, os
-          results = json.loads(os.environ['RESULTS'])
-          failed = any(v['result'] in ('failure', 'cancelled') for v in results.values())
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
-              out.write('| Job | Result |\n|---|---|\n')
-              for key, value in results.items():
-                  out.write(f"| {key} | {value['result']} |\n")
+          import json
+          import os
+
+          results = json.loads(os.environ["RESULTS"])
+          failed = any(
+              value["result"] in ("failure", "cancelled")
+              for value in results.values()
+          )
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write("| Job | Result |\n|---|---|\n")
+              for name, value in results.items():
+                  output.write(f"| {name} | {value['result']} |\n")
+
           if failed:
-              raise SystemExit('Pipeline failed; inspect state and job logs')
+              raise SystemExit(
+                  "Pipeline failed; inspect the failed job and saved state."
+              )
           PY
