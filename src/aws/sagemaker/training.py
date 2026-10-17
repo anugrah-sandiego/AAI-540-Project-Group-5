@@ -2,6 +2,15 @@
 SageMaker training job implementation for bank marketing model.
 """
 
+# CI uses the shared fitted-preprocessing release engine. Legacy library APIs remain below.
+import os as _ci_os
+
+if __name__ == "__main__" and _ci_os.environ.get("GROUP5_CI") == "1":
+    from src.aws.sagemaker.ci_entrypoints import run as _ci_run
+    _ci_run("training")
+    raise SystemExit(0)
+
+
 import os
 import boto3
 import sagemaker

@@ -21,7 +21,9 @@ class S3DataUploader:
 
         self.account_id = os.getenv('AWS_ACCOUNT_ID')
         self.region = os.getenv('AWS_REGION', 'us-east-1')
-        self.bucket_name = f"sagemaker-{self.region}-{self.account_id}"
+        if not self.account_id:
+            raise ValueError('Set AWS_ACCOUNT_ID before uploading data.')
+        self.bucket_name = os.getenv('AWS_BUCKET') or f"sagemaker-{self.region}-{self.account_id}"
         self.base_prefix = "aai540/bank-marketing"
 
         self.s3_client = boto3.client(
@@ -96,6 +98,8 @@ class S3DataUploader:
 
         # Upload main dataset
         bank_full = data_dir / "bank-full.csv"
+        if not bank_full.is_file():
+            raise FileNotFoundError(f'Required dataset is missing: {bank_full}')
         if bank_full.exists():
             uploaded['bank_full'] = self.upload_file(
                 str(bank_full),

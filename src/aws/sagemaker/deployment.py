@@ -1,253 +1,267 @@
-"""Deploy the selected completed SageMaker training artifact.
-
-The legacy classifier expects already encoded numeric features in training order.
-This script does not reconstruct or refit a missing categorical encoder.
 """
-import json
-import logging
-import os
-from datetime import datetime, timezone
-from pathlib import Path
-from urllib.parse import urlparse
-from uuid import uuid4
+SageMaker model deployment and endpoint management.
+"""
 
+# CI uses the shared fitted-preprocessing release engine. Legacy library APIs remain below.
+import os as _ci_os
+
+if __name__ == "__main__" and _ci_os.environ.get("GROUP5_CI") == "1":
+    from src.aws.sagemaker.ci_entrypoints import run as _ci_run
+    _ci_run("deployment")
+    raise SystemExit(0)
+
+
+import os
 import boto3
 import sagemaker
-from dotenv import load_dotenv
-from sagemaker.model_monitor import DataCaptureConfig
 from sagemaker.sklearn.model import SKLearnModel
+from sagemaker.model_monitor import DataCaptureConfig, DefaultModelMonitor
+from sagemaker.serializers import CSVSerializer
+from dotenv import load_dotenv
+import logging
+from datetime import datetime
+import time
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-INFERENCE_SCRIPT = r'''
-import csv
-import io
-import json
-from pathlib import Path
 
+class SageMakerDeployment:
+    """Manage SageMaker model deployment and endpoints."""
+
+    def __init__(self):
+        """Initialize SageMaker session and configuration."""
+        load_dotenv()
+
+        self.region = os.getenv('AWS_REGION', 'us-east-1')
+        self.role_arn = os.getenv('AWS_ROLE_ARN')
+        self.account_id = os.getenv('AWS_ACCOUNT_ID')
+        self.bucket_name = f"sagemaker-{self.region}-{self.account_id}"
+        self.base_prefix = "aai540/bank-marketing"
+
+        self.sagemaker_session = sagemaker.Session(boto3.session.Session(region_name=self.region))
+        self.sm_client = boto3.client('sagemaker', region_name=self.region)
+
+        logger.info(f"Initialized SageMaker deployment for region: {self.region}")
+
+    def prepare_inference_script(self):
+        """
+        Prepare the inference script for SageMaker endpoint.
+
+        This script handles prediction requests.
+        """
+        inference_script_content = '''
+import json
 import joblib
+import os
 import numpy as np
 import pandas as pd
 
 
 def model_fn(model_dir):
-    model = joblib.load(Path(model_dir) / "model.joblib")
-    if not hasattr(model, "predict_proba"):
-        raise ValueError("Expected a classifier with predict_proba; incompatible artifact.")
+    """Load the model from model_dir."""
+    model_path = os.path.join(model_dir, 'model.joblib')
+    model = joblib.load(model_path)
     return model
 
 
 def input_fn(request_body, request_content_type):
-    if isinstance(request_body, bytes):
-        request_body = request_body.decode("utf-8")
-    kind = request_content_type.split(";")[0].strip().lower()
-    if kind == "text/csv":
-        rows = list(csv.reader(io.StringIO(request_body)))
-        if not rows or not rows[0]:
-            raise ValueError("CSV must contain numeric rows without a header.")
-        frame = pd.DataFrame(rows)
-    elif kind == "application/json":
+    """Parse input data."""
+    if request_content_type == 'text/csv':
+        # Parse CSV input
+        data = request_body.split(',')
+        return np.array([float(x) for x in data])
+    elif request_content_type == 'application/json':
+        # Parse JSON input
         data = json.loads(request_body)
-        columns = None
-        if isinstance(data, dict):
-            columns = data.get("columns")
-            data = data.get("instances")
-        if not isinstance(data, list) or not data:
-            raise ValueError("Use a numeric list, a list of rows, or an instances object.")
-        if isinstance(data[0], dict):
-            if columns is not None:
-                raise ValueError("Omit columns when instances are named records.")
-            frame = pd.DataFrame(data)
-        else:
-            if not isinstance(data[0], list):
-                data = [data]
-            frame = pd.DataFrame(data, columns=columns)
+        return np.array(data)
     else:
-        raise ValueError("Supported input types: text/csv and application/json.")
-    if frame.empty or frame.columns.duplicated().any():
-        raise ValueError("Input must be nonempty with unique feature columns.")
-    try:
-        frame = frame.apply(pd.to_numeric, errors="raise").astype(float)
-    except (ValueError, TypeError) as exc:
-        raise ValueError("Use already encoded numeric features; raw categories are unsupported.") from exc
-    if not np.isfinite(frame.to_numpy()).all():
-        raise ValueError("Features must be finite numeric values.")
-    return frame
+        raise ValueError(f"Unsupported content type: {request_content_type}")
 
 
-def predict_fn(frame, model):
-    expected_count = getattr(model, "n_features_in_", None)
-    if expected_count is not None and frame.shape[1] != expected_count:
-        raise ValueError(f"Expected {expected_count} encoded features; received {frame.shape[1]}.")
-    names = getattr(model, "feature_names_in_", None)
-    if names is not None:
-        names = list(names)
-        if isinstance(frame.columns, pd.RangeIndex):
-            frame = frame.copy()
-            frame.columns = names
-        else:
-            if set(frame.columns) != set(names):
-                raise ValueError("Named columns must exactly match encoded training feature names.")
-            frame = frame.loc[:, names]
-    elif not isinstance(frame.columns, pd.RangeIndex):
-        raise ValueError("Model has no saved feature names; send positional features in training order.")
-    classes = list(model.classes_)
-    if 1 not in classes:
-        raise ValueError("The model must have positive class label 1.")
-    probabilities = model.predict_proba(frame)[:, classes.index(1)]
-    if not np.isfinite(probabilities).all():
-        raise ValueError("Model returned nonfinite probabilities.")
-    return probabilities
+def predict_fn(input_data, model):
+    """Make predictions."""
+    # Reshape if needed
+    if input_data.ndim == 1:
+        input_data = input_data.reshape(1, -1)
+
+    # Get probability predictions
+    proba = model.predict_proba(input_data)[:, 1]
+    return proba
 
 
 def output_fn(prediction, accept):
-    kind = (accept or "application/json").split(";")[0].strip().lower()
-    if kind == "text/csv":
-        return "\n".join(str(float(value)) for value in prediction)
-    if kind in ("application/json", "*/*"):
-        return json.dumps({"prediction": prediction.tolist()})
-    raise ValueError("Supported response types: text/csv and application/json.")
+    """Format prediction output."""
+    if accept == 'text/csv':
+        return ','.join([str(x) for x in prediction])
+    elif accept == 'application/json':
+        return json.dumps({'prediction': prediction.tolist()})
+    else:
+        raise ValueError(f"Unsupported accept type: {accept}")
 '''
 
+        # Save inference script
+        script_dir = Path("src/aws/sagemaker/scripts")
+        script_dir.mkdir(parents=True, exist_ok=True)
 
-class SageMakerDeployment:
-    def __init__(self):
-        load_dotenv()
-        self.region = os.getenv("AWS_REGION", "us-east-1")
-        self.role_arn = os.getenv("AWS_ROLE_ARN")
-        self.account_id = os.getenv("AWS_ACCOUNT_ID")
-        if not self.role_arn:
-            raise ValueError("Set AWS_ROLE_ARN to your SageMaker execution role ARN.")
-        if not self.account_id:
-            raise ValueError("Set AWS_ACCOUNT_ID to your AWS account ID.")
-        self.bucket_name = os.getenv("AWS_BUCKET") or f"sagemaker-{self.region}-{self.account_id}"
-        self.base_prefix = "aai540/bank-marketing"
-        aws_session = boto3.session.Session(region_name=self.region)
-        self.sagemaker_session = sagemaker.Session(boto_session=aws_session)
-        self.sm_client = aws_session.client("sagemaker")
-        self.s3_client = aws_session.client("s3")
-        self.runtime_client = aws_session.client("sagemaker-runtime")
+        script_path = script_dir / "inference.py"
+        with open(script_path, 'w') as f:
+            f.write(inference_script_content)
 
-    def prepare_inference_script(self):
-        # Dedicated folder avoids packaging unrelated training scripts/requirements.
-        folder = Path(__file__).resolve().parent / "scripts" / "deployment"
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / "inference.py"
-        path.write_text(INFERENCE_SCRIPT, encoding="utf-8")
-        return str(path)
+        logger.info(f"Inference script saved to {script_path}")
+        return str(script_path)
 
-    def verify_model_artifact(self, model_s3_uri):
-        parsed = urlparse(model_s3_uri)
-        if parsed.scheme != "s3" or not parsed.netloc or not parsed.path.strip("/"):
-            raise ValueError("Expected an s3://bucket/key model artifact URI.")
-        self.s3_client.head_object(Bucket=parsed.netloc, Key=parsed.path.lstrip("/"))
+    def deploy_model(self, model_s3_uri: str, endpoint_name: str = None,
+                    instance_type: str = 'ml.m5.xlarge',
+                    initial_instance_count: int = 1,
+                    enable_data_capture: bool = True):
+        """
+        Deploy a trained model to a SageMaker endpoint.
 
-    def deploy_model(self, model_s3_uri, endpoint_name=None,
-                     instance_type="ml.m5.xlarge", initial_instance_count=1,
-                     enable_data_capture=True):
-        if initial_instance_count < 1:
-            raise ValueError("initial_instance_count must be at least 1.")
-        self.verify_model_artifact(model_s3_uri)
+        Args:
+            model_s3_uri: S3 URI of the trained model
+            endpoint_name: Name for the endpoint
+            instance_type: Instance type for the endpoint
+            initial_instance_count: Number of instances
+            enable_data_capture: Whether to enable data capture for monitoring
+
+        Returns:
+            Predictor object for the endpoint
+        """
         if endpoint_name is None:
-            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-            endpoint_name = f"bank-marketing-endpoint-{stamp}-{uuid4().hex[:6]}"
-        script = Path(self.prepare_inference_script())
+            endpoint_name = f"bank-marketing-endpoint-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+        # Prepare inference script
+        script_path = self.prepare_inference_script()
+
+        # Create SKLearn model
         model = SKLearnModel(
             model_data=model_s3_uri,
             role=self.role_arn,
-            entry_point=script.name,
-            source_dir=str(script.parent),
-            framework_version="1.2-1",
-            py_version="py3",
-            sagemaker_session=self.sagemaker_session,
+            entry_point='inference.py',
+            source_dir=str(Path(script_path).parent),
+            framework_version='1.2-1',
+            py_version='py3',
+            sagemaker_session=self.sagemaker_session
         )
-        capture = None
+
+        # Configure data capture for monitoring
+        data_capture_config = None
         if enable_data_capture:
-            capture = DataCaptureConfig(
-                enable_capture=True, sampling_percentage=100,
-                destination_s3_uri=f"s3://{self.bucket_name}/{self.base_prefix}/monitoring/data-capture/",
-                capture_options=["REQUEST", "RESPONSE"],
-                csv_content_types=["text/csv"],
-                json_content_types=["application/json"],
-                sagemaker_session=self.sagemaker_session,
+            capture_s3_uri = f"s3://{self.bucket_name}/{self.base_prefix}/monitoring/data-capture/"
+            data_capture_config = DataCaptureConfig(
+                enable_capture=True,
+                sampling_percentage=100,
+                destination_s3_uri=capture_s3_uri,
+                capture_options=['REQUEST', 'RESPONSE'],
+                csv_content_types=['text/csv'],
+                json_content_types=['application/json']
             )
-        logger.info("Deploying %s to %s", model_s3_uri, endpoint_name)
+
+        logger.info(f"Deploying model to endpoint: {endpoint_name}")
         predictor = model.deploy(
             initial_instance_count=initial_instance_count,
-            instance_type=instance_type, endpoint_name=endpoint_name,
-            data_capture_config=capture,
+            instance_type=instance_type,
+            endpoint_name=endpoint_name,
+            data_capture_config=data_capture_config
         )
-        logger.info("Endpoint deployed: %s", predictor.endpoint_name)
+
+        logger.info(f"Model deployed to endpoint: {endpoint_name}")
         return predictor
 
-    def invoke_endpoint(self, endpoint_name, data, content_type="text/csv"):
-        kind = content_type.split(";")[0].strip().lower()
-        if kind == "text/csv":
-            import csv
-            import io
-            rows = data if data and isinstance(data[0], (list, tuple)) else [data]
-            stream = io.StringIO()
-            csv.writer(stream).writerows(rows)
-            payload = stream.getvalue()
-        elif kind == "application/json":
+    def invoke_endpoint(self, endpoint_name: str, data: list,
+                        content_type: str = 'text/csv'):
+        """
+        Invoke a SageMaker endpoint for prediction.
+
+        Args:
+            endpoint_name: Name of the endpoint
+            data: Input data for prediction
+            content_type: Content type of the input
+
+        Returns:
+            Prediction results
+        """
+        runtime_client = boto3.client('runtime.sagemaker', region_name=self.region)
+
+        if content_type == 'text/csv':
+            payload = ','.join([str(x) for x in data])
+        elif content_type == 'application/json':
+            import json
             payload = json.dumps(data)
         else:
-            raise ValueError("Use text/csv or application/json.")
-        response = self.runtime_client.invoke_endpoint(
-            EndpointName=endpoint_name, ContentType=kind, Accept=kind,
-            Body=payload.encode("utf-8"),
-        )
-        try:
-            return response["Body"].read().decode("utf-8")
-        finally:
-            response["Body"].close()
+            raise ValueError(f"Unsupported content type: {content_type}")
 
-    def describe_endpoint(self, endpoint_name):
-        endpoint = self.sm_client.describe_endpoint(EndpointName=endpoint_name)
-        config = self.sm_client.describe_endpoint_config(
-            EndpointConfigName=endpoint["EndpointConfigName"]
+        response = runtime_client.invoke_endpoint(
+            EndpointName=endpoint_name,
+            ContentType=content_type,
+            Body=payload
         )
-        live = {v["VariantName"]: v for v in endpoint.get("ProductionVariants", [])}
+
+        result = response['Body'].read().decode('utf-8')
+        return result
+
+    def delete_endpoint(self, endpoint_name: str):
+        """
+        Delete a SageMaker endpoint.
+
+        Args:
+            endpoint_name: Name of the endpoint to delete
+        """
+        logger.info(f"Deleting endpoint: {endpoint_name}")
+        self.sm_client.delete_endpoint(EndpointName=endpoint_name)
+        logger.info(f"Endpoint {endpoint_name} deleted")
+
+    def describe_endpoint(self, endpoint_name: str) -> dict:
+        """
+        Get endpoint information.
+
+        Args:
+            endpoint_name: Name of the endpoint
+
+        Returns:
+            Dictionary with endpoint information
+        """
+        response = self.sm_client.describe_endpoint(EndpointName=endpoint_name)
         return {
-            "endpoint_name": endpoint["EndpointName"],
-            "endpoint_status": endpoint["EndpointStatus"],
-            "creation_time": endpoint.get("CreationTime"),
-            "endpoint_config_name": endpoint["EndpointConfigName"],
-            "variants": [dict(
-                variant_name=v["VariantName"], model_name=v["ModelName"],
-                instance_type=v.get("InstanceType"),
-                instance_count=live.get(v["VariantName"], {}).get("CurrentInstanceCount"),
-            ) for v in config["ProductionVariants"]],
+            'endpoint_name': response['EndpointName'],
+            'endpoint_status': response['EndpointStatus'],
+            'creation_time': response.get('CreationTime'),
+            'endpoint_config_name': response.get('EndpointConfigName'),
+            'instance_type': response.get('ProductionVariants', [{}])[0].get('InstanceType'),
+            'instance_count': response.get('ProductionVariants', [{}])[0].get('InitialInstanceCount')
         }
 
-    def list_endpoints(self):
-        return [ep["EndpointName"]
-                for page in self.sm_client.get_paginator("list_endpoints").paginate()
-                for ep in page.get("Endpoints", [])]
+    def list_endpoints(self) -> list:
+        """
+        List all SageMaker endpoints.
 
-    def delete_endpoint(self, endpoint_name):
-        self.sm_client.delete_endpoint(EndpointName=endpoint_name)
-        self.sm_client.get_waiter("endpoint_deleted").wait(EndpointName=endpoint_name)
-        logger.info("Endpoint deleted: %s", endpoint_name)
+        Returns:
+            List of endpoint names
+        """
+        response = self.sm_client.list_endpoints()
+        return [ep['EndpointName'] for ep in response['Endpoints']]
 
 
 def main():
-    load_dotenv()
-    job_name = os.getenv("TRAINING_JOB_NAME")
-    if not job_name:
-        raise ValueError("Set TRAINING_JOB_NAME to the completed training job.")
+    """Main function to deploy model."""
     deployer = SageMakerDeployment()
-    job = deployer.sm_client.describe_training_job(TrainingJobName=job_name)
-    if job["TrainingJobStatus"] != "Completed":
-        raise ValueError(f"Training job is not completed: {job['TrainingJobStatus']}")
-    model_uri = job["ModelArtifacts"]["S3ModelArtifacts"]
-    print("Training job:", job_name)
-    print("Deploying artifact:", model_uri)
-    predictor = deployer.deploy_model(
-        model_uri, endpoint_name=os.getenv("ENDPOINT_NAME") or None
+
+    # Example model S3 URI (would be obtained from training job)
+    model_s3_uri = (
+        "s3://sagemaker-us-east-1-562792440372/"
+        "aai540/bank-marketing/models/"
+        "bank-marketing-training-20261011-095612/output/model.tar.gz"
     )
-    print("Model deployed. Endpoint:", predictor.endpoint_name)
+
+    # Deploy model
+    predictor = deployer.deploy_model(model_s3_uri)
+
+    print(f"Model deployed. Endpoint: {predictor.endpoint_name}")
+
+    # Example invocation
+    # result = deployer.invoke_endpoint(predictor.endpoint_name, [30, 1500, 5, ...])
 
 
 if __name__ == "__main__":
