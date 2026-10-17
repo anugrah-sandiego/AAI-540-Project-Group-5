@@ -1,407 +1,116 @@
-name: Group 5 CI and SageMaker release
+name: Group 5 CI/CD AWS 
 
 on:
   push:
     branches: [main, develop]
-
   pull_request:
     branches: [main]
-
   workflow_dispatch:
     inputs:
-      release:
-        description: 'Run AWS training and deployment'
-        type: boolean
-        default: false
+      outcome:
+        description: 'Simulation outcome (no AWS code is executed)'
+        required: true
+        type: choice
+        options:
+          - success
+          - failure
+        default: success
 
 permissions:
   contents: read
 
 concurrency:
-  group: group5-${{ github.ref }}
+  group: group5-simulation-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  AWS_ACCOUNT_ID: '562792440372'
-  AWS_REGION: us-east-1
-  AWS_BUCKET: sagemaker-us-east-1-562792440372
-  AWS_ROLE_ARN: arn:aws:iam::562792440372:role/LabRole
-
-  RAW_DATA_URI: s3://sagemaker-us-east-1-562792440372/aai540/bank-marketing/raw/bank-full.csv
-
-  RELEASE_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
-  PRODUCTION_ENDPOINT: bank-marketing-production
-  BASE_TRAINING_JOB_NAME: bank-marketing-training-20261011-095612
-
-  MIN_ROC_AUC: '0.75'
-  MIN_LIFT_AT_10: '2.5'
+  SIMULATION_OUTCOME: ${{ inputs.outcome || 'success' }}
 
 jobs:
-  checks:
-    name: Code checks and tests
+  data_upload:
+    name: 'SIMULATION 1 - S3 data upload'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: cicd/requirements-ci.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r cicd/requirements-ci.txt
-
-      - name: Check dependency compatibility
-        run: python -m pip check
-
-      - name: Check fatal lint errors
-        run: ruff check src cicd --select E9,F63,F7,F82
-
-      - name: Run unit and mocked integration tests
-        env:
-          AWS_EC2_METADATA_DISABLED: 'true'
+      - name: Simulate data upload for 60 seconds
         run: |
-          python -m pytest tests -v \
-            --junitxml=artifacts/tests.xml \
-            --cov=src \
-            --cov=cicd \
-            --cov-report=xml:artifacts/coverage.xml
+          echo "SIMULATION ONLY: no AWS calls or Python modules are executed."
+          echo "Represented command: python -m src.aws.sagemaker.data_upload"
+          sleep 60
+          echo "Simulated data upload completed."
 
-      - name: Save test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results
-          path: artifacts/
-          if-no-files-found: ignore
-
-  train:
-    name: Prepare data and train on AWS
-    needs: checks
-
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' ||
-       (github.event_name == 'workflow_dispatch' && inputs.release))
-
+  feature_store:
+    name: 'SIMULATION 2 - Feature Store'
+    needs: data_upload
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment: lab
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: cicd/requirements-ci.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r cicd/requirements-ci.txt
-
-      - name: Validate AWS secret availability
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+      - name: Simulate Feature Store for 60 seconds
         run: |
-          python - <<'PY'
-          import os
+          echo "SIMULATION ONLY: no feature group is created or populated."
+          echo "Represented command: python -m src.aws.sagemaker.feature_store"
+          sleep 60
+          echo "Simulated Feature Store stage completed."
 
-          required = [
-              "AWS_ACCESS_KEY_ID",
-              "AWS_SECRET_ACCESS_KEY",
-              "AWS_SESSION_TOKEN",
-          ]
-
-          missing = [
-              name
-              for name in required
-              if not os.environ.get(name, "").strip()
-          ]
-
-          if missing:
-              raise SystemExit(
-                  "Configure these GitHub Actions secrets: "
-                  + ", ".join(missing)
-              )
-
-          print("Required AWS secrets are present.")
-          PY
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Verify AWS account
-        run: |
-          account_id=$(aws sts get-caller-identity \
-            --query Account --output text)
-
-          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
-            echo "::error::Unexpected AWS account"
-            exit 1
-          fi
-
-          echo "Authenticated to the expected AWS account."
-
-      - name: Check required AWS resources
-        run: |
-          aws s3api head-object \
-            --bucket "$AWS_BUCKET" \
-            --key aai540/bank-marketing/raw/bank-full.csv
-
-          aws sagemaker describe-training-job \
-            --training-job-name "$BASE_TRAINING_JOB_NAME" \
-            --query '{Status:TrainingJobStatus,Image:AlgorithmSpecification.TrainingImage}' \
-            --output table
-
-          aws sagemaker list-model-package-groups \
-            --max-results 1 \
-            --output table
-
-      - name: Prepare S3 training inputs
-        run: python -m cicd.release prepare
-
-      - name: Run SageMaker training
-        run: python -m cicd.release train
-
-      - name: Save training state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-train
-          path: artifacts/release.json
-          if-no-files-found: ignore
-
-  evaluate:
-    name: Evaluate model quality
-    needs: train
+  training:
+    name: 'SIMULATION 3 - Model training'
+    needs: feature_store
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: lab
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: cicd/requirements-ci.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r cicd/requirements-ci.txt
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Verify AWS account
+      - name: Simulate training for 60 seconds
         run: |
-          account_id=$(aws sts get-caller-identity \
-            --query Account --output text)
+          echo "SIMULATION ONLY: no model is trained."
+          echo "Represented command: python -m src.aws.sagemaker.training"
+          sleep 60
+          echo "Simulated training completed."
 
-          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
-            echo "::error::Unexpected AWS account"
-            exit 1
-          fi
-
-      - name: Download training state
-        uses: actions/download-artifact@v4
-        with:
-          name: state-train
-          path: artifacts
-
-      - name: Evaluate and enforce quality gates
-        run: python -m cicd.release evaluate
-
-      - name: Save evaluation state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-evaluate
-          path: artifacts/release.json
-          if-no-files-found: ignore
-
-  register:
-    name: Register evaluated model
-    needs: evaluate
+  model_registry:
+    name: 'SIMULATION 4 - Model registration'
+    needs: training
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: lab
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: cicd/requirements-ci.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r cicd/requirements-ci.txt
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Verify AWS account
+      - name: Simulate registration for 60 seconds
         run: |
-          account_id=$(aws sts get-caller-identity \
-            --query Account --output text)
+          echo "SIMULATION ONLY: no model package is registered."
+          echo "Represented command: python -m src.aws.sagemaker.model_registry"
+          sleep 60
+          echo "Simulated registration completed."
 
-          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
-            echo "::error::Unexpected AWS account"
-            exit 1
-          fi
-
-      - name: Download evaluation state
-        uses: actions/download-artifact@v4
-        with:
-          name: state-evaluate
-          path: artifacts
-
-      - name: Register model pending approval
-        run: python -m cicd.release register
-
-      - name: Save registration state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-register
-          path: artifacts/release.json
-          if-no-files-found: ignore
-
-  deploy:
-    name: Approve, test staging, and deploy production
-    needs: register
+  deployment:
+    name: 'SIMULATION 5 - Model deployment'
+    needs: model_registry
     runs-on: ubuntu-latest
-    timeout-minutes: 180
-    environment: production
-
+    timeout-minutes: 5
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: pip
-          cache-dependency-path: cicd/requirements-ci.txt
-
-      - name: Install dependencies
-        run: python -m pip install -r cicd/requirements-ci.txt
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Verify AWS account
+      - name: Simulate deployment for 60 seconds
         run: |
-          account_id=$(aws sts get-caller-identity \
-            --query Account --output text)
+          echo "SIMULATION ONLY: no endpoint is created or updated."
+          echo "Represented command: python -m src.aws.sagemaker.deployment"
+          sleep 60
 
-          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
-            echo "::error::Unexpected AWS account"
-            exit 1
-          fi
-
-      - name: Download registration state
-        uses: actions/download-artifact@v4
-        with:
-          name: state-register
-          path: artifacts
-
-      - name: Approve registered model
-        run: python -m cicd.release approve
-
-      - name: Deploy staging and validate predictions
-        run: python -m cicd.release staging
-
-      - name: Promote to production with recovery handling
-        run: python -m cicd.release promote
-
-      - name: Clean staging resources
-        if: always()
+      - name: Set the selected simulation result
+        shell: bash
         run: |
-          if [ -f artifacts/release.json ]; then
-            python -m cicd.release cleanup
-          fi
+          {
+            echo "## Group 5 CI/CD simulation"
+            echo ""
+            echo "No AWS operations or project Python modules were executed."
+            echo "Each of the five stages waited 60 seconds."
+            echo "Selected simulation outcome: $SIMULATION_OUTCOME"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Save deployment state
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: state-deploy
-          path: artifacts/release.json
-          if-no-files-found: ignore
-
-  outcome:
-    name: Report pipeline outcome
-    needs: [checks, train, evaluate, register, deploy]
-    if: always()
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Report actual job results
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python - <<'PY'
-          import json
-          import os
-
-          results = json.loads(os.environ["RESULTS"])
-
-          failed = any(
-              value["result"] in ("failure", "cancelled")
-              for value in results.values()
-          )
-
-          with open(
-              os.environ["GITHUB_STEP_SUMMARY"], "a"
-          ) as output:
-              output.write("| Job | Result |\n|---|---|\n")
-
-              for name, value in results.items():
-                  output.write(
-                      f"| {name} | {value['result']} |\n"
-                  )
-
-          if failed:
-              raise SystemExit(
-                  "Pipeline failed. Inspect the failed job "
-                  "and its saved state."
-              )
-          PY
+          case "$SIMULATION_OUTCOME" in
+            success)
+              echo "Simulation completed successfully."
+              ;;
+            failure)
+              echo "::error::Intentional simulation failure selected. No AWS deployment was attempted."
+              exit 1
+              ;;
+            *)
+              echo "::error::Invalid simulation outcome. Choose success or failure."
+              exit 1
+              ;;
+          esac
