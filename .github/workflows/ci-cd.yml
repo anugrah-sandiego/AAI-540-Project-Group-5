@@ -22,13 +22,17 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  AWS_ACCOUNT_ID: '562792440372'
   AWS_REGION: us-east-1
   AWS_BUCKET: sagemaker-us-east-1-562792440372
   AWS_ROLE_ARN: arn:aws:iam::562792440372:role/LabRole
+
   RAW_DATA_URI: s3://sagemaker-us-east-1-562792440372/aai540/bank-marketing/raw/bank-full.csv
+
   RELEASE_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
   PRODUCTION_ENDPOINT: bank-marketing-production
   BASE_TRAINING_JOB_NAME: bank-marketing-training-20261011-095612
+
   MIN_ROC_AUC: '0.75'
   MIN_LIFT_AT_10: '2.5'
 
@@ -69,8 +73,8 @@ jobs:
             --cov-report=xml:artifacts/coverage.xml
 
       - name: Save test reports
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: artifacts/
@@ -103,6 +107,36 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r cicd/requirements-ci.txt
 
+      - name: Validate AWS secret availability
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+
+          required = [
+              "AWS_ACCESS_KEY_ID",
+              "AWS_SECRET_ACCESS_KEY",
+              "AWS_SESSION_TOKEN",
+          ]
+
+          missing = [
+              name
+              for name in required
+              if not os.environ.get(name, "").strip()
+          ]
+
+          if missing:
+              raise SystemExit(
+                  "Configure these GitHub Actions secrets: "
+                  + ", ".join(missing)
+              )
+
+          print("Required AWS secrets are present.")
+          PY
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -110,10 +144,18 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: '562792440372'
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
+      - name: Verify AWS account
+        run: |
+          account_id=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
+            echo "::error::Unexpected AWS account"
+            exit 1
+          fi
+
+          echo "Authenticated to the expected AWS account."
 
       - name: Check required AWS resources
         run: |
@@ -137,8 +179,8 @@ jobs:
         run: python -m cicd.release train
 
       - name: Save training state
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: state-train
           path: artifacts/release.json
@@ -172,7 +214,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: '562792440372'
+
+      - name: Verify AWS account
+        run: |
+          account_id=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
+            echo "::error::Unexpected AWS account"
+            exit 1
+          fi
 
       - name: Download training state
         uses: actions/download-artifact@v4
@@ -184,8 +235,8 @@ jobs:
         run: python -m cicd.release evaluate
 
       - name: Save evaluation state
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: state-evaluate
           path: artifacts/release.json
@@ -219,7 +270,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: '562792440372'
+
+      - name: Verify AWS account
+        run: |
+          account_id=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
+            echo "::error::Unexpected AWS account"
+            exit 1
+          fi
 
       - name: Download evaluation state
         uses: actions/download-artifact@v4
@@ -231,8 +291,8 @@ jobs:
         run: python -m cicd.release register
 
       - name: Save registration state
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: state-register
           path: artifacts/release.json
@@ -266,7 +326,16 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
-          allowed-account-ids: '562792440372'
+
+      - name: Verify AWS account
+        run: |
+          account_id=$(aws sts get-caller-identity \
+            --query Account --output text)
+
+          if [ "$account_id" != "$AWS_ACCOUNT_ID" ]; then
+            echo "::error::Unexpected AWS account"
+            exit 1
+          fi
 
       - name: Download registration state
         uses: actions/download-artifact@v4
@@ -283,7 +352,7 @@ jobs:
       - name: Promote to production with recovery handling
         run: python -m cicd.release promote
 
-      - name: Always clean staging resources
+      - name: Clean staging resources
         if: always()
         run: |
           if [ -f artifacts/release.json ]; then
@@ -291,8 +360,8 @@ jobs:
           fi
 
       - name: Save deployment state
-        uses: actions/upload-artifact@v4
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: state-deploy
           path: artifacts/release.json
@@ -314,18 +383,25 @@ jobs:
           import os
 
           results = json.loads(os.environ["RESULTS"])
+
           failed = any(
               value["result"] in ("failure", "cancelled")
               for value in results.values()
           )
 
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+          with open(
+              os.environ["GITHUB_STEP_SUMMARY"], "a"
+          ) as output:
               output.write("| Job | Result |\n|---|---|\n")
+
               for name, value in results.items():
-                  output.write(f"| {name} | {value['result']} |\n")
+                  output.write(
+                      f"| {name} | {value['result']} |\n"
+                  )
 
           if failed:
               raise SystemExit(
-                  "Pipeline failed; inspect the failed job and saved state."
+                  "Pipeline failed. Inspect the failed job "
+                  "and its saved state."
               )
           PY
